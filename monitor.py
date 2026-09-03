@@ -6,7 +6,7 @@ from playwright.sync_api import sync_playwright
 
 URL = "https://license-test.tokyo-madoguchi-yoyaku.com/police-pref-tokyo/calendar/01/html/main.html?lang=ja"
 
-# 現時点の最短空き日
+# 現時点の最短の空き日
 CUTOFF = date(2026, 10, 14)
 
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
