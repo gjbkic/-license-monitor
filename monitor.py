@@ -1,333 +1,209 @@
 import os
-
 import re
-
-import json
-
 import requests
-
-from datetime import datetime
-
+from datetime import date
 from playwright.sync_api import sync_playwright
 
 URL = "https://license-test.tokyo-madoguchi-yoyaku.com/police-pref-tokyo/calendar/01/html/main.html?lang=ja"
 
-STATE_FILE = "state.json"
+# 現時点の最短空き日
+CUTOFF = date(2026, 10, 14)
 
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 
-def send_discord(message):
+
+def notify(message):
+    print(message)
 
     if not DISCORD_WEBHOOK:
-
-        print("DISCORD_WEBHOOK が設定されていません")
-
+        print("DISCORD_WEBHOOK が未設定です")
         return
 
-    response = requests.post(
-
+    r = requests.post(
         DISCORD_WEBHOOK,
-
         json={"content": message},
-
         timeout=20
-
     )
+    print("Discord:", r.status_code)
 
-    if response.status_code not in (200, 204):
 
-        print("Discord通知失敗:", response.status_code, response.text)
+def scan_month(page):
+    # 表示中の「2026年 10月」などを取得
+    body = page.locator("body").inner_text()
 
-def load_state():
+    m = re.search(r"(20\d{2})年\s*(\d{1,2})月", body)
+    if not m:
+        print("年月を取得できませんでした")
+        return []
 
-    if not os.path.exists(STATE_FILE):
+    year = int(m.group(1))
+    month = int(m.group(2))
 
-        return None
+    print(f"調査中: {year}-{month:02d}")
 
+    found = []
+
+    # 1～31の日付表示を全部調査
+    for day in range(1, 32):
+        locators = page.get_by_text(str(day), exact=True)
+
+        for i in range(locators.count()):
+            try:
+                el = locators.nth(i)
+
+                if not el.is_visible():
+                    continue
+
+                # 要素そのもの＋親要素から予約可能か推定
+                info = el.evaluate("""
+                el => {
+                    const p = el.parentElement;
+
+                    return {
+                        tag: el.tagName,
+                        cls: el.className || "",
+                        disabled: el.disabled === true,
+                        ariaDisabled: el.getAttribute("aria-disabled"),
+                        parentClass: p ? (p.className || "") : "",
+                        parentDisabled: p ? p.disabled === true : false,
+                        parentAriaDisabled: p ? p.getAttribute("aria-disabled") : null
+                    };
+                }
+                """)
+
+                text = str(info).lower()
+
+                # disabled と明示されているものは除外
+                if (
+                    info["disabled"]
+                    or info["parentDisabled"]
+                    or info["ariaDisabled"] == "true"
+                    or info["parentAriaDisabled"] == "true"
+                    or "disabled" in text
+                ):
+                    continue
+
+                # 実際にクリック可能か確認
+                try:
+                    clickable = el.evaluate("""
+                    el => {
+                        const style = window.getComputedStyle(el);
+                        const p = el.parentElement;
+                        const ps = p ? window.getComputedStyle(p) : null;
+
+                        return (
+                            style.pointerEvents !== "none" &&
+                            (!ps || ps.pointerEvents !== "none")
+                        );
+                    }
+                    """)
+                except:
+                    clickable = False
+
+                if not clickable:
+                    continue
+
+                try:
+                    d = date(year, month, day)
+                except ValueError:
+                    continue
+
+                found.append(d)
+
+            except Exception:
+                pass
+
+    return sorted(set(found))
+
+
+def previous_month(page):
+    """
+    カレンダー左上の「前月」矢印を押す。
+    """
+    candidates = [
+        'button[aria-label*="前"]',
+        'a[aria-label*="前"]',
+        '.ui-datepicker-prev',
+        '[title*="前"]'
+    ]
+
+    for selector in candidates:
+        try:
+            el = page.locator(selector).first
+            if el.count() and el.is_visible():
+                el.click()
+                page.wait_for_timeout(1500)
+                return True
+        except:
+            pass
+
+    # 最後の手段：2026年○月の近くにある左側のクリック要素
     try:
+        page.locator("button").filter(has_text="").first.click()
+        page.wait_for_timeout(1500)
+        return True
+    except:
+        return False
 
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
 
-            return json.load(f)
-
-    except Exception:
-
-        return None
-
-def save_state(dates):
-
-    data = {
-
-        "available_dates": sorted(dates),
-
-        "updated_at": datetime.now().isoformat()
-
-    }
-
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-def normalize_date(text):
-
-    """
-
-    例:
-
-    9月8日
-
-    2026年9月8日
-
-    09/08
-
-    などを 2026-09-08 にする
-
-    """
-
-    # 2026年9月8日
-
-    m = re.search(r"(2026)年\s*(\d{1,2})月\s*(\d{1,2})日", text)
-
-    if m:
-
-        return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-
-    # 9月8日
-
-    m = re.search(r"(\d{1,2})月\s*(\d{1,2})日", text)
-
-    if m:
-
-        return f"2026-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
-
-    # 9/8
-
-    m = re.search(r"\b(\d{1,2})/(\d{1,2})\b", text)
-
-    if m:
-
-        return f"2026-{int(m.group(1)):02d}-{int(m.group(2)):02d}"
-
-    return None
-
-def get_available_dates():
-
+def main():
     with sync_playwright() as p:
-
         browser = p.chromium.launch(headless=True)
 
         page = browser.new_page(
-
-            viewport={"width": 1280, "height": 1000},
-
+            viewport={"width": 1280, "height": 1200},
             user_agent=(
-
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-
                 "AppleWebKit/537.36 (KHTML, like Gecko) "
-
                 "Chrome/128.0.0.0 Safari/537.36"
-
             )
-
         )
 
-        print("予約サイトを開いています…")
+        print("予約サイトを開きます")
 
         page.goto(
-
             URL,
-
             wait_until="networkidle",
-
             timeout=60000
-
         )
 
-        page.wait_for_timeout(5000)
+        page.wait_for_timeout(4000)
 
-        title = page.title()
+        print("タイトル:", page.title())
 
-        print("ページタイトル:", title)
+        all_available = []
 
-        body_text = page.locator("body").inner_text()
+        # 現在表示されている月
+        all_available += scan_month(page)
 
-        print("=== ページ本文の先頭 ===")
-
-        print(body_text[:5000])
-
-        print("=== ここまで ===")
-
-        available_dates = set()
-
-        # 空き枠を表していそうな要素を探す
-
-        elements = page.locator(
-
-            "a, button, td, div, span"
-
-        )
-
-        count = elements.count()
-
-        availability_words = [
-
-            "○",
-
-            "〇",
-
-            "空きあり",
-
-            "予約可",
-
-            "予約可能"
-
-        ]
-
-        for i in range(count):
-
-            try:
-
-                el = elements.nth(i)
-
-                text = el.inner_text(timeout=500).strip()
-
-                if not text:
-
-                    continue
-
-                if not any(word in text for word in availability_words):
-
-                    continue
-
-                # 空き表示の周辺テキストも取得
-
-                surrounding = text
-
-                try:
-
-                    parent_text = el.locator(
-
-                        "xpath=ancestor::*[self::td or self::tr or self::li or self::div][1]"
-
-                    ).inner_text(timeout=500)
-
-                    surrounding += "\n" + parent_text
-
-                except Exception:
-
-                    pass
-
-                date = normalize_date(surrounding)
-
-                if date:
-
-                    available_dates.add(date)
-
-                    print("空き候補:", date, repr(surrounding[:200]))
-
-            except Exception:
-
-                continue
+        # 前月もチェック（9月のキャンセル対策）
+        if previous_month(page):
+            all_available += scan_month(page)
 
         browser.close()
 
-        return available_dates
+    all_available = sorted(set(all_available))
 
-def main():
+    print("予約可能と判定した日:")
+    for d in all_available:
+        print(d.isoformat())
 
-    current_dates = get_available_dates()
+    earlier = [d for d in all_available if d < CUTOFF]
 
-    print("現在取得できた空き日:")
-
-    for d in sorted(current_dates):
-
-        print(" -", d)
-
-    previous = load_state()
-
-    # 初回実行
-
-    if previous is None:
-
-        print("初回実行です。現在の状態を基準として保存します。")
-
-        save_state(current_dates)
-
-        return
-
-    previous_dates = set(previous.get("available_dates", []))
-
-    # 前回にはなく、今回新しく出た日
-
-    new_dates = current_dates - previous_dates
-
-    if previous_dates:
-
-        previous_earliest = min(previous_dates)
-
-    else:
-
-        previous_earliest = None
-
-    alert_dates = []
-
-    for date in sorted(new_dates):
-
-        # 2026年9月なら通知
-
-        is_september = date.startswith("2026-09-")
-
-        # 前回の最短日より早ければ通知
-
-        earlier_than_before = (
-
-            previous_earliest is not None
-
-            and date < previous_earliest
-
+    if earlier:
+        dates = "\n".join(
+            f"✅ {d.month}/{d.day}" for d in earlier
         )
 
-        if is_september or earlier_than_before:
-
-            alert_dates.append(date)
-
-    if alert_dates:
-
-        lines = [
-
-            "🚨 本免試験の早い予約枠が出た可能性があります！",
-
-            ""
-
-        ]
-
-        for date in alert_dates:
-
-            lines.append(f"✅ {date}")
-
-        lines += [
-
-            "",
-
-            "すぐ予約サイトを確認してください。",
-
-            URL
-
-        ]
-
-        message = "\n".join(lines)
-
-        print(message)
-
-        send_discord(message)
-
+        notify(
+            "🚨 本免試験、10/14より前に空きが出た可能性あり！\n\n"
+            + dates
+            + "\n\nすぐ予約サイトを確認して！\n"
+            + URL
+        )
     else:
+        print("10/14より前の空きはありません")
 
-        print("通知対象となる新しい空きはありません。")
-
-    save_state(current_dates)
 
 if __name__ == "__main__":
-
     main()
