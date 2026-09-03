@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import requests
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -15,23 +16,25 @@ START_URL = (
     "police-pref-tokyo/index_000.html"
 )
 
-# この日までを通知対象にする
-# 10/9も含む
+# この日まで通知対象
+# 10/9を含む
 LATEST_ALERT_DATE = date(2026, 10, 9)
 
-# 3会場すべて監視
+# 監視対象
 LOCATIONS = [
     "府中試験場",
     "鮫洲試験場",
     "江東試験場",
 ]
 
-# GitHub Actions の Secret から取得
+# 速報後の再確認までの秒数
+RECHECK_SECONDS = 5
+
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 
 
 # ============================================================
-# ページ操作
+# 基本操作
 # ============================================================
 
 def click_text(page, text):
@@ -43,12 +46,12 @@ def click_text(page, text):
         raise Exception(f"「{text}」が見つかりません")
 
     for i in range(locator.count()):
-        element = locator.nth(i)
+        el = locator.nth(i)
 
         try:
-            if element.is_visible():
-                element.click()
-                page.wait_for_timeout(800)
+            if el.is_visible():
+                el.click()
+                page.wait_for_timeout(700)
                 return
         except Exception:
             pass
@@ -65,14 +68,13 @@ def agree_terms(page):
 
     if checkbox.count() == 0:
         raise Exception(
-            "利用規約のチェックボックスが見つかりません"
+            "利用規約チェックボックスが見つかりません"
         )
 
-    # このサイトでは実際のinputが非表示なので
-    # JavaScript経由でクリック
+    # inputが非表示なのでJS経由
     checkbox.evaluate("el => el.click()")
 
-    page.wait_for_timeout(400)
+    page.wait_for_timeout(300)
 
     if not checkbox.is_checked():
         raise Exception(
@@ -83,20 +85,17 @@ def agree_terms(page):
 
 
 # ============================================================
-# Discord通知
+# Discord
 # ============================================================
 
 def send_discord(message):
     print("")
-    print("========== 通知内容 ==========")
+    print("========== Discord ==========")
     print(message)
-    print("==============================")
+    print("=============================")
 
     if not DISCORD_WEBHOOK:
-        print(
-            "DISCORD_WEBHOOK が未設定です。"
-            "Discord通知は送信されません。"
-        )
+        print("DISCORD_WEBHOOK が未設定です")
         return
 
     try:
@@ -106,26 +105,17 @@ def send_discord(message):
             timeout=20
         )
 
-        print(
-            "Discord status:",
-            response.status_code
-        )
+        print("Discord status:", response.status_code)
 
         if response.status_code not in (200, 204):
-            print(
-                "Discord通知エラー:",
-                response.text
-            )
+            print(response.text)
 
     except Exception as e:
-        print(
-            "Discord通知送信失敗:",
-            e
-        )
+        print("Discord送信エラー:", e)
 
 
 # ============================================================
-# カレンダー関係
+# カレンダー
 # ============================================================
 
 def get_year_month(page):
@@ -157,57 +147,45 @@ def setup_calendar(page, location):
         timeout=60000
     )
 
-    page.wait_for_timeout(1500)
+    page.wait_for_timeout(1200)
 
-    print(
-        "入口タイトル:",
-        page.title()
-    )
+    print("入口タイトル:", page.title())
 
-    # ① 学科試験
     click_text(
         page,
         "学科試験の予約はこちら"
     )
 
-    # ② 利用規約
     agree_terms(page)
 
-    # ③ 手続開始
     click_text(
         page,
         "手続を開始する"
     )
 
-    # ④ 実予約ではなく空き状況カレンダー
     click_text(
         page,
         "空き状況カレンダー"
     )
 
-    # ⑤ 教習所卒業
     click_text(
         page,
         "教習所卒業等"
     )
 
-    # ⑥ 従来の免許証
     click_text(
         page,
         "免許証のみ"
     )
 
-    # ⑦ 会場
     click_text(
         page,
         location
     )
 
-    page.wait_for_timeout(1200)
+    page.wait_for_timeout(1000)
 
-    body = page.locator(
-        "body"
-    ).inner_text()
+    body = page.locator("body").inner_text()
 
     if "日付を選択してください" not in body:
         print(body[:3000])
@@ -221,14 +199,12 @@ def setup_calendar(page, location):
 
     if year is None:
         raise Exception(
-            f"{location}: "
-            "カレンダーの年月を取得できません"
+            f"{location}: 年月を取得できません"
         )
 
     print(
         f"{location}: "
-        f"カレンダー到達 "
-        f"{year}-{month:02d}"
+        f"カレンダー到達 {year}-{month:02d}"
     )
 
 
@@ -241,16 +217,11 @@ def click_previous_month(page):
 
     for selector in selectors:
         try:
-            element = page.locator(
-                selector
-            ).first
+            el = page.locator(selector).first
 
-            if (
-                element.count() > 0
-                and element.is_visible()
-            ):
-                element.click()
-                page.wait_for_timeout(600)
+            if el.count() > 0 and el.is_visible():
+                el.click()
+                page.wait_for_timeout(500)
                 return True
 
         except Exception:
@@ -268,16 +239,11 @@ def click_next_month(page):
 
     for selector in selectors:
         try:
-            element = page.locator(
-                selector
-            ).first
+            el = page.locator(selector).first
 
-            if (
-                element.count() > 0
-                and element.is_visible()
-            ):
-                element.click()
-                page.wait_for_timeout(600)
+            if el.count() > 0 and el.is_visible():
+                el.click()
+                page.wait_for_timeout(500)
                 return True
 
         except Exception:
@@ -286,11 +252,7 @@ def click_next_month(page):
     return False
 
 
-def move_to_month(
-    page,
-    target_year,
-    target_month
-):
+def move_to_month(page, target_year, target_month):
     for _ in range(6):
 
         year, month = get_year_month(page)
@@ -319,75 +281,21 @@ def move_to_month(
 
 
 # ============================================================
-# 空き判定
+# 日付がクリック可能か確認
 # ============================================================
 
-def get_available_days(
-    page,
-    year,
-    month
-):
-    available = []
-
-    # 日本時間で「今日」を毎回取得
-    today = datetime.now(
-        ZoneInfo("Asia/Tokyo")
-    ).date()
-
-    print("日本時間の今日:", today.isoformat())
-
+def find_day_cell(page, day):
     cells = page.locator(
         ".ui-datepicker-calendar td"
     )
 
-    print(
-        "カレンダーセル数:",
-        cells.count()
-    )
-
     for i in range(cells.count()):
-
         try:
             cell = cells.nth(i)
 
-            text = (
-                cell.inner_text()
-                .strip()
-            )
+            text = cell.inner_text().strip()
 
-            if not text.isdigit():
-                continue
-
-            day = int(text)
-
-            try:
-                target_date = date(
-                    year,
-                    month,
-                    day
-                )
-
-            except ValueError:
-                continue
-
-            # ----------------------------------------
-            # 今日以前は監視対象外
-            #
-            # 9/3に実行 → 9/3以前を除外
-            # 9/4に実行 → 9/4以前を除外
-            # 9/5に実行 → 9/5以前を除外
-            # と自動で変わる
-            # ----------------------------------------
-
-            if target_date <= today:
-                continue
-
-            # ----------------------------------------
-            # 10/9より後は通知対象外
-            # 10/9は含む
-            # ----------------------------------------
-
-            if target_date > LATEST_ALERT_DATE:
+            if text != str(day):
                 continue
 
             info = cell.evaluate(
@@ -409,7 +317,6 @@ def get_available_days(
                 or ""
             ).lower()
 
-            # グレー表示・選択不可の日を除外
             if (
                 "ui-datepicker-unselectable" in cls
                 or
@@ -417,36 +324,156 @@ def get_available_days(
                 or
                 info["ariaDisabled"] == "true"
             ):
-                continue
+                return None
 
-            # 実際に選択可能な日は
-            # 基本的に a または button が入っている
-            clickable = (
-                info["links"] > 0
-                or
-                info["buttons"] > 0
+            if (
+                info["links"] == 0
+                and info["buttons"] == 0
+            ):
+                return None
+
+            return cell
+
+        except Exception:
+            pass
+
+    return None
+
+
+# ============================================================
+# 「残り○名」を取得
+# ============================================================
+
+def read_remaining_slots(page):
+    body = page.locator("body").inner_text()
+
+    results = []
+
+    definitions = [
+        (
+            "午前試験 8:00",
+            "午前試験",
+            "8:00"
+        ),
+        (
+            "午後試験 11:00",
+            "午後試験",
+            "11:00"
+        ),
+    ]
+
+    for label, section, time_text in definitions:
+
+        pattern = (
+            re.escape(section)
+            + r".{0,300}?"
+            + re.escape(time_text)
+            + r".{0,300}?"
+            + r"残り\s*(\d+)\s*名"
+        )
+
+        match = re.search(
+            pattern,
+            body,
+            re.S
+        )
+
+        if match:
+            remaining = int(
+                match.group(1)
             )
 
-            if not clickable:
-                continue
-
-            available.append(
-                target_date
+            results.append(
+                {
+                    "time": label,
+                    "remaining": remaining
+                }
             )
 
-            print(
-                "🚨 空き候補:",
-                target_date.isoformat()
+    return results
+
+
+# ============================================================
+# 1日だけ本当に空いているか確認
+# ============================================================
+
+def check_date(page, target_date):
+    if not move_to_month(
+        page,
+        target_date.year,
+        target_date.month
+    ):
+        return []
+
+    cell = find_day_cell(
+        page,
+        target_date.day
+    )
+
+    if cell is None:
+        return []
+
+    print(
+        f"選択可能日を確認: "
+        f"{target_date.isoformat()}"
+    )
+
+    try:
+        link = cell.locator("a").first
+
+        if link.count() > 0:
+            link.click()
+        else:
+            button = cell.locator(
+                "button"
+            ).first
+
+            button.click()
+
+    except Exception as e:
+        print(
+            "日付クリック失敗:",
+            target_date,
+            e
+        )
+        return []
+
+    page.wait_for_timeout(600)
+
+    slots = read_remaining_slots(page)
+
+    positive = []
+
+    if not slots:
+        print(
+            "  残席情報を取得できません"
+        )
+        return []
+
+    for slot in slots:
+        print(
+            f"  {slot['time']} "
+            f"残り{slot['remaining']}名"
+        )
+
+        # ★ ここが重要
+        # 日付が押せるだけでは通知しない。
+        # 実際に残り1名以上だけを空き扱い。
+        if slot["remaining"] > 0:
+            positive.append(
+                {
+                    "date": target_date,
+                    "time": slot["time"],
+                    "remaining": slot["remaining"]
+                }
             )
 
-        except Exception as e:
-            print(
-                "セル確認エラー:",
-                e
-            )
+    return positive
 
-    return available
 
+# ============================================================
+# 9月・10月を調査
+# ============================================================
 
 def scan_month(
     page,
@@ -456,10 +483,8 @@ def scan_month(
 ):
     print("")
     print(
-        "===== "
-        f"{location} "
-        f"{year}/{month} "
-        "====="
+        f"===== {location} "
+        f"{year}/{month} ====="
     )
 
     if not move_to_month(
@@ -472,28 +497,57 @@ def scan_month(
             f"{year}/{month}へ移動できません"
         )
 
-    actual_year, actual_month = (
-        get_year_month(page)
-    )
+    today = datetime.now(
+        ZoneInfo("Asia/Tokyo")
+    ).date()
 
-    print(
-        "表示中:",
-        actual_year,
-        actual_month
-    )
+    results = []
 
-    return get_available_days(
-        page,
-        year,
-        month
-    )
+    for day in range(1, 32):
+
+        try:
+            target_date = date(
+                year,
+                month,
+                day
+            )
+
+        except ValueError:
+            continue
+
+        # 今日以前は除外
+        if target_date <= today:
+            continue
+
+        # 10/9より後は除外
+        if target_date > LATEST_ALERT_DATE:
+            continue
+
+        cell = find_day_cell(
+            page,
+            day
+        )
+
+        if cell is None:
+            continue
+
+        slots = check_date(
+            page,
+            target_date
+        )
+
+        for slot in slots:
+            slot["location"] = location
+            results.append(slot)
+
+    return results
 
 
 # ============================================================
-# 各試験場
+# 会場を最初から確認
 # ============================================================
 
-def check_location(
+def scan_location(
     browser,
     location
 ):
@@ -523,46 +577,29 @@ def check_location(
             location
         )
 
-        dates = []
+        results = []
 
-        # 2026年9月
-        dates += scan_month(
+        results += scan_month(
             page,
             location,
             2026,
             9
         )
 
-        # 2026年10月
-        # 10/9までだけ実際に拾う
-        dates += scan_month(
+        results += scan_month(
             page,
             location,
             2026,
             10
         )
 
-        return dates, None
+        return results, None
 
     except Exception as e:
-
-        print("")
         print(
-            f"❌ {location} エラー:"
+            f"❌ {location} エラー:",
+            e
         )
-        print(e)
-
-        try:
-            body = page.locator(
-                "body"
-            ).inner_text()
-
-            print(
-                body[:3000]
-            )
-
-        except Exception:
-            pass
 
         return [], str(e)
 
@@ -571,13 +608,100 @@ def check_location(
 
 
 # ============================================================
+# 5秒後の再確認
+# ============================================================
+
+def recheck_location(
+    browser,
+    location,
+    original_slots
+):
+    context = browser.new_context(
+        viewport={
+            "width": 1280,
+            "height": 1200
+        },
+
+        locale="ja-JP",
+
+        user_agent=(
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/128.0.0.0 "
+            "Safari/537.36"
+        )
+    )
+
+    page = context.new_page()
+
+    try:
+        setup_calendar(
+            page,
+            location
+        )
+
+        unique_dates = sorted(
+            set(
+                slot["date"]
+                for slot in original_slots
+            )
+        )
+
+        confirmed = []
+
+        for target_date in unique_dates:
+
+            slots = check_date(
+                page,
+                target_date
+            )
+
+            for slot in slots:
+                slot["location"] = location
+                confirmed.append(slot)
+
+        return confirmed, None
+
+    except Exception as e:
+        return [], str(e)
+
+    finally:
+        context.close()
+
+
+# ============================================================
+# 表示用
+# ============================================================
+
+def slot_key(slot):
+    return (
+        slot["location"],
+        slot["date"].isoformat(),
+        slot["time"]
+    )
+
+
+def slot_line(slot):
+    d = slot["date"]
+
+    return (
+        f"✅ {slot['location']} "
+        f"{d.month}/{d.day} "
+        f"{slot['time']} "
+        f"残り{slot['remaining']}名"
+    )
+
+
+# ============================================================
 # メイン
 # ============================================================
 
 def main():
-
-    found = []
     errors = []
+    any_success = False
+    any_slot = False
 
     with sync_playwright() as p:
 
@@ -585,28 +709,168 @@ def main():
             headless=True
         )
 
-        # 府中・鮫洲・江東を順番に確認
         for location in LOCATIONS:
 
-            dates, error = (
-                check_location(
-                    browser,
-                    location
-                )
+            slots, error = scan_location(
+                browser,
+                location
             )
-
-            for target_date in dates:
-
-                found.append(
-                    {
-                        "location": location,
-                        "date": target_date
-                    }
-                )
 
             if error:
                 errors.append(
                     f"{location}: {error}"
+                )
+                continue
+
+            any_success = True
+
+            if not slots:
+                print(
+                    f"{location}: "
+                    "通知対象の空きなし"
+                )
+                continue
+
+            any_slot = True
+
+            # --------------------------------------------
+            # ① 即時速報
+            # --------------------------------------------
+
+            lines = [
+                "🚨【速報】本免学科試験の空きを検知！",
+                ""
+            ]
+
+            for slot in slots:
+                lines.append(
+                    slot_line(slot)
+                )
+
+            lines += [
+                "",
+                f"{RECHECK_SECONDS}秒後に"
+                "自動で再確認します。",
+                START_URL
+            ]
+
+            send_discord(
+                "\n".join(lines)
+            )
+
+            # --------------------------------------------
+            # ② 5秒待つ
+            # --------------------------------------------
+
+            print(
+                f"{RECHECK_SECONDS}秒待って"
+                "再確認します..."
+            )
+
+            time.sleep(
+                RECHECK_SECONDS
+            )
+
+            # --------------------------------------------
+            # ③ 新しいブラウザ状態で再確認
+            # --------------------------------------------
+
+            confirmed, recheck_error = (
+                recheck_location(
+                    browser,
+                    location,
+                    slots
+                )
+            )
+
+            if recheck_error:
+
+                send_discord(
+                    "⚠️ 空き速報後の再確認に失敗しました。\n"
+                    f"{location}\n"
+                    "最初の検知は成功しているので、"
+                    "念のため予約サイトを確認してください。\n"
+                    + START_URL
+                )
+
+                continue
+
+            original_keys = {
+                slot_key(slot)
+                for slot in slots
+            }
+
+            confirmed_keys = {
+                slot_key(slot)
+                for slot in confirmed
+            }
+
+            vanished = [
+                slot
+                for slot in slots
+                if slot_key(slot)
+                not in confirmed_keys
+            ]
+
+            # --------------------------------------------
+            # ④ 再確認結果通知
+            # --------------------------------------------
+
+            if confirmed:
+
+                lines = [
+                    "✅【再確認OK】"
+                    f"{RECHECK_SECONDS}秒後も空いています！",
+                    ""
+                ]
+
+                for slot in confirmed:
+                    lines.append(
+                        slot_line(slot)
+                    )
+
+                if vanished:
+                    lines += [
+                        "",
+                        "⚠️ 次の枠は再確認時には"
+                        "消えていました:"
+                    ]
+
+                    for slot in vanished:
+                        d = slot["date"]
+
+                        lines.append(
+                            f"・{slot['location']} "
+                            f"{d.month}/{d.day} "
+                            f"{slot['time']}"
+                        )
+
+                lines += [
+                    "",
+                    "すぐ予約してください。",
+                    START_URL
+                ]
+
+                send_discord(
+                    "\n".join(lines)
+                )
+
+            else:
+
+                lines = [
+                    "⚠️【再確認】"
+                    f"{RECHECK_SECONDS}秒後には"
+                    "空きがなくなっていました。",
+                    "",
+                    "一瞬のキャンセル枠だったか、"
+                    "サイト表示のタイミング差の"
+                    "可能性があります。",
+                    "",
+                    START_URL
+                ]
+
+                send_discord(
+                    "\n".join(lines)
                 )
 
         browser.close()
@@ -616,110 +880,20 @@ def main():
     print("最終結果")
     print("======================")
 
-    # 全会場で取得失敗した場合は、
-    # 「空きなし」と誤判定させない
-    if len(errors) == len(LOCATIONS):
-
-        print(
-            "❌ 全会場の監視に失敗しました"
-        )
-
+    if not any_success:
         for error in errors:
             print(error)
 
         raise Exception(
-            "予約サイトの監視に失敗しました"
+            "全会場の監視に失敗しました"
         )
 
-    # 一部会場だけ失敗
-    if errors:
-
+    if not any_slot:
         print(
-            "⚠️ 一部会場でエラー:"
-        )
-
-        for error in errors:
-            print(error)
-
-    # 空きなし
-    if not found:
-
-        print(
-            "✅ 正常に確認完了"
-        )
-
-        print(
+            "✅ 正常に監視完了。"
             "現在、明日〜10/9に"
-            "通知対象の空きはありません"
+            "残席のある枠はありません。"
         )
-
-        return
-
-    # ========================================================
-    # 重複削除
-    # ========================================================
-
-    unique = {}
-
-    for item in found:
-
-        key = (
-            item["location"],
-            item["date"]
-        )
-
-        unique[key] = item
-
-    found = list(
-        unique.values()
-    )
-
-    # 日付が早い順
-    found.sort(
-        key=lambda x: (
-            x["date"],
-            x["location"]
-        )
-    )
-
-    print("")
-    print(
-        "🚨 通知対象の空き発見"
-    )
-
-    # ========================================================
-    # Discord通知作成
-    # ========================================================
-
-    lines = [
-        "🚨 本免学科試験の早い空きが出ています！",
-        ""
-    ]
-
-    for item in found:
-
-        d = item["date"]
-
-        line = (
-            f"✅ "
-            f"{item['location']} "
-            f"{d.month}/{d.day}"
-        )
-
-        print(line)
-
-        lines.append(line)
-
-    lines += [
-        "",
-        "明日〜10/9の枠です。",
-        "すぐ予約サイトを確認してください。",
-        START_URL
-    ]
-
-    send_discord(
-        "\n".join(lines)
-    )
 
 
 if __name__ == "__main__":
