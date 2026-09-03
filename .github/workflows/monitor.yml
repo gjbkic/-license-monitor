@@ -1,14 +1,18 @@
 name: 本免キャンセル監視
 
 on:
+  # 手動テスト用
   workflow_dispatch:
 
+  # 10分ごとに自動実行
+  # 00分ちょうどを避けて 3,13,23... 分にしている
   schedule:
-    - cron: "*/30 * * * *"
+    - cron: "3,13,23,33,43,53 * * * *"
 
 jobs:
   monitor:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
 
     steps:
       - name: コード取得
