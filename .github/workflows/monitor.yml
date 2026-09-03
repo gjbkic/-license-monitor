@@ -3,7 +3,7 @@ name: 本免キャンセル監視
 on:
   workflow_dispatch:
 
-  # 5分ごとの通常監視
+  # 5分ごと
   schedule:
     - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
 
@@ -23,6 +23,14 @@ jobs:
       - name: コード取得
         uses: actions/checkout@v4
 
+      - name: 前回状態を復元
+        uses: actions/cache/restore@v4
+        with:
+          path: .monitor_state.json
+          key: monitor-state-${{ github.run_id }}
+          restore-keys: |
+            monitor-state-
+
       - name: Python設定
         uses: actions/setup-python@v5
         with:
@@ -36,12 +44,11 @@ jobs:
       - name: 予約状況チェック
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-
-          # 手動Run workflowのときだけクリックテスト
-          TEST_MODE: ${{ github.event_name == 'workflow_dispatch' && 'true' || 'false' }}
-
-          # テスト対象
-          TEST_LOCATION: "府中試験場"
-          TEST_DATE: "2026-10-15"
-
         run: python monitor.py
+
+      - name: 今回状態を保存
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .monitor_state.json
+          key: monitor-state-${{ github.run_id }}
