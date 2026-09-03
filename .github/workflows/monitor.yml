@@ -1,11 +1,10 @@
 name: 本免キャンセル監視
 
 on:
-  # 手動テスト用
+  # 手動実行
   workflow_dispatch:
 
-  # 10分ごとに自動実行
-  # 00分ちょうどを避けて 3,13,23... 分にしている
+  # 10分ごとに自動確認
   schedule:
     - cron: "3,13,23,33,43,53 * * * *"
 
@@ -27,6 +26,16 @@ jobs:
         run: |
           pip install -r requirements.txt
           playwright install chromium --with-deps
+
+      # 手動実行したときだけDiscordへテスト通知
+      - name: Discord通知テスト
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: |
+          curl -H "Content-Type: application/json" \
+          -d '{"content":"✅ 本免キャンセル監視：Discord通知テスト成功！"}' \
+          "$DISCORD_WEBHOOK"
 
       - name: 予約状況チェック
         env:
