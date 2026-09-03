@@ -10,11 +10,10 @@ START_URL = (
     "police-pref-tokyo/index_000.html"
 )
 
-# 現在確認できている最短枠が10/14なので、
-# 10/13までを監視対象にする
+# 10/14より前に空きが出たら通知
 CUTOFF = date(2026, 10, 14)
 
-# 3会場すべて確認
+# 3会場全部チェック
 LOCATIONS = [
     "府中試験場",
     "鮫洲試験場",
@@ -25,14 +24,13 @@ DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 
 
 def click_text(page, text):
-    print(f"クリック: {text}")
+    print("クリック:", text)
 
     locator = page.get_by_text(text, exact=True)
 
     if locator.count() == 0:
         raise Exception(f"「{text}」が見つかりません")
 
-    # 見えている要素を優先
     for i in range(locator.count()):
         el = locator.nth(i)
 
@@ -47,6 +45,31 @@ def click_text(page, text):
     raise Exception(f"「{text}」をクリックできません")
 
 
+def agree_terms(page):
+    print("利用規約に同意します")
+
+    checkbox = page.locator(
+        'input[name="TermsOfServiceCheck"]'
+    ).first
+
+    if checkbox.count() == 0:
+        raise Exception(
+            "利用規約チェックボックスが見つかりません"
+        )
+
+    # 実際のinputが非表示なのでJavaScriptから操作
+    checkbox.evaluate("el => el.click()")
+
+    page.wait_for_timeout(500)
+
+    if not checkbox.is_checked():
+        raise Exception(
+            "利用規約にチェックできませんでした"
+        )
+
+    print("利用規約チェック: OK")
+
+
 def send_discord(message):
     print("")
     print("========== 通知 ==========")
@@ -54,19 +77,19 @@ def send_discord(message):
     print("==========================")
 
     if not DISCORD_WEBHOOK:
-        print("DISCORD_WEBHOOK がまだ設定されていません")
+        print(
+            "DISCORD_WEBHOOK未設定なので"
+            "Discordにはまだ送りません"
+        )
         return
 
-    response = requests.post(
+    r = requests.post(
         DISCORD_WEBHOOK,
         json={"content": message},
-        timeout=20,
+        timeout=20
     )
 
-    print("Discord status:", response.status_code)
-
-    if response.status_code not in (200, 204):
-        print(response.text)
+    print("Discord status:", r.status_code)
 
 
 def get_year_month(page):
@@ -83,153 +106,105 @@ def get_year_month(page):
     return int(m.group(1)), int(m.group(2))
 
 
-def agree_terms(page):
-    print("利用規約に同意します")
-
-    checkbox = page.locator(
-        'input[name="TermsOfServiceCheck"]'
-    ).first
-
-    if checkbox.count() == 0:
-        raise Exception(
-            "利用規約のチェックボックスが見つかりません"
-        )
-
-    # このサイトは本体inputが画面上では非表示なので
-    # JavaScript経由でクリックする
-    checkbox.evaluate("el => el.click()")
-
-    page.wait_for_timeout(700)
-
-    if not checkbox.is_checked():
-        raise Exception(
-            "利用規約にチェックできませんでした"
-        )
-
-    print("利用規約チェック: OK")
-
-
-def setup_to_location(page, location):
+def setup_calendar(page, location):
     print("")
     print("==============================")
-    print(f"開始: {location}")
+    print("開始:", location)
     print("==============================")
 
+    # 入口
     page.goto(
         START_URL,
         wait_until="domcontentloaded",
         timeout=60000
     )
 
-    page.wait_for_timeout(2500)
+    page.wait_for_timeout(2000)
 
     print("入口タイトル:", page.title())
 
-    # ① 学科試験予約
+    # 最初の画面
     click_text(
         page,
         "学科試験の予約はこちら"
     )
 
-    # ② 規約同意
+    # 規約
     agree_terms(page)
 
-    # ③ 手続開始
     click_text(
         page,
         "手続を開始する"
     )
 
-    # ④ 学科試験
+    # ★ここが重要
+    # 実際の予約ではなく空き状況カレンダーへ
     click_text(
         page,
-        "学科試験"
+        "空き状況カレンダー"
     )
 
-    # ⑤ 教習所卒業等
+    # 受験項目
     click_text(
         page,
         "教習所卒業等"
     )
 
-    # ⑥ 免許証のみ
+    # 免許保有形態
     click_text(
         page,
         "免許証のみ"
     )
 
-    # ⑦ 試験場
+    # 会場
     click_text(
         page,
         location
     )
 
-    page.wait_for_timeout(2000)
+    page.wait_for_timeout(1500)
 
     body = page.locator("body").inner_text()
 
     if "日付を選択してください" not in body:
-        print(body[:5000])
+        print(body[:3000])
+
         raise Exception(
-            f"{location}: カレンダーまで到達できませんでした"
+            f"{location}: "
+            "空き状況カレンダーまで到達できません"
         )
 
     year, month = get_year_month(page)
 
     if year is None:
-        print(body[:5000])
         raise Exception(
-            f"{location}: カレンダー年月を取得できません"
+            f"{location}: 年月を取得できません"
         )
 
     print(
-        f"{location}: カレンダー到達 "
-        f"{year}-{month:02d}"
+        f"{location}: "
+        f"カレンダー到達 {year}-{month:02d}"
     )
 
 
 def click_previous_month(page):
     selectors = [
         ".ui-datepicker-prev",
-        '[aria-label*="前"]',
         '[title*="前"]',
-        'a[class*="prev"]',
-        'button[class*="prev"]',
+        '[aria-label*="前"]',
     ]
 
     for selector in selectors:
+
         try:
             el = page.locator(selector).first
 
-            if el.count() > 0 and el.is_visible():
-                el.click()
-                page.wait_for_timeout(1200)
-                return True
-        except Exception:
-            pass
-
-    # HTMLから前月ボタンらしきものを探す
-    elements = page.locator(
-        "a, button, div, span"
-    )
-
-    for i in range(elements.count()):
-        try:
-            el = elements.nth(i)
-
-            if not el.is_visible():
-                continue
-
-            html = el.evaluate(
-                "el => el.outerHTML"
-            ).lower()
-
             if (
-                "datepicker-prev" in html
-                or 'class="prev' in html
+                el.count() > 0
+                and el.is_visible()
             ):
                 el.click()
-                page.wait_for_timeout(1200)
+                page.wait_for_timeout(800)
                 return True
 
         except Exception:
@@ -241,44 +216,21 @@ def click_previous_month(page):
 def click_next_month(page):
     selectors = [
         ".ui-datepicker-next",
-        '[aria-label*="次"]',
         '[title*="次"]',
-        'a[class*="next"]',
-        'button[class*="next"]',
+        '[aria-label*="次"]',
     ]
 
     for selector in selectors:
+
         try:
             el = page.locator(selector).first
 
-            if el.count() > 0 and el.is_visible():
-                el.click()
-                page.wait_for_timeout(1200)
-                return True
-        except Exception:
-            pass
-
-    elements = page.locator(
-        "a, button, div, span"
-    )
-
-    for i in range(elements.count()):
-        try:
-            el = elements.nth(i)
-
-            if not el.is_visible():
-                continue
-
-            html = el.evaluate(
-                "el => el.outerHTML"
-            ).lower()
-
             if (
-                "datepicker-next" in html
-                or 'class="next' in html
+                el.count() > 0
+                and el.is_visible()
             ):
                 el.click()
-                page.wait_for_timeout(1200)
+                page.wait_for_timeout(800)
                 return True
 
         except Exception:
@@ -287,7 +239,11 @@ def click_next_month(page):
     return False
 
 
-def move_to_month(page, target_year, target_month):
+def move_to_month(
+    page,
+    target_year,
+    target_month
+):
     for _ in range(6):
 
         year, month = get_year_month(page)
@@ -302,143 +258,142 @@ def move_to_month(page, target_year, target_month):
             return True
 
         current = year * 12 + month
-        target = target_year * 12 + target_month
+        target = (
+            target_year * 12
+            + target_month
+        )
 
         if current < target:
+
             if not click_next_month(page):
                 return False
 
         else:
+
             if not click_previous_month(page):
                 return False
 
     return False
 
 
-def find_clickable_day(page, day):
+def get_available_days(
+    page,
+    year,
+    month
+):
     """
-    カレンダー上で実際に選択可能な日付を探す。
-    薄いグレーの日は除外する。
+    jQuery UIカレンダー上で
+    実際に選択可能な日だけ取得する。
+
+    グレーで選べない日は除外。
     """
 
-    candidates = page.get_by_text(
-        str(day),
-        exact=True
+    available = []
+
+    today = datetime.now(
+        ZoneInfo("Asia/Tokyo")
+    ).date()
+
+    cells = page.locator(
+        ".ui-datepicker-calendar td"
     )
 
-    for i in range(candidates.count()):
+    print(
+        f"カレンダーセル数: "
+        f"{cells.count()}"
+    )
+
+    for i in range(cells.count()):
 
         try:
-            el = candidates.nth(i)
+            cell = cells.nth(i)
 
-            if not el.is_visible():
+            text = cell.inner_text().strip()
+
+            if not text.isdigit():
                 continue
 
-            info = el.evaluate(
+            day = int(text)
+
+            try:
+                d = date(
+                    year,
+                    month,
+                    day
+                )
+            except ValueError:
+                continue
+
+            # 過去日は無視
+            if d < today:
+                continue
+
+            # 10/14以降は対象外
+            if d >= CUTOFF:
+                continue
+
+            info = cell.evaluate(
                 """
-                el => {
-                    let node = el;
-
-                    for (let i = 0; i < 5 && node; i++) {
-
-                        const style =
-                            window.getComputedStyle(node);
-
-                        const cls =
-                            String(node.className || "")
-                            .toLowerCase();
-
-                        if (
-                            node.tagName === "A" ||
-                            node.tagName === "BUTTON" ||
-                            node.onclick ||
-                            node.getAttribute("role") === "button" ||
-                            style.cursor === "pointer"
-                        ) {
-
-                            return {
-                                found: true,
-                                disabled:
-                                    node.disabled === true ||
-                                    node.getAttribute(
-                                        "aria-disabled"
-                                    ) === "true" ||
-                                    cls.includes("disabled") ||
-                                    cls.includes("unselectable") ||
-                                    style.pointerEvents === "none"
-                            };
-                        }
-
-                        node = node.parentElement;
-                    }
-
-                    return {
-                        found: false,
-                        disabled: true
-                    };
-                }
+                el => ({
+                    cls: String(
+                        el.className || ""
+                    ),
+                    ariaDisabled:
+                        el.getAttribute(
+                            "aria-disabled"
+                        ),
+                    links:
+                        el.querySelectorAll("a").length,
+                    buttons:
+                        el.querySelectorAll(
+                            "button"
+                        ).length
+                })
                 """
             )
 
+            cls = (
+                info["cls"]
+                or ""
+            ).lower()
+
+            # 明示的に無効なら除外
             if (
-                info["found"]
-                and not info["disabled"]
+                "ui-datepicker-unselectable"
+                in cls
+                or
+                "ui-state-disabled"
+                in cls
+                or
+                info["ariaDisabled"]
+                == "true"
             ):
-                return el
+                continue
 
-        except Exception:
-            pass
-
-    return None
-
-
-def read_remaining_slots(page):
-    """
-    選択した日の
-    午前・午後の残席数を取得する。
-    """
-
-    body = page.locator("body").inner_text()
-
-    results = []
-
-    morning = re.search(
-        r"午前試験"
-        r".{0,200}?"
-        r"8:00"
-        r".{0,200}?"
-        r"残り\s*(\d+)\s*名",
-        body,
-        re.S
-    )
-
-    if morning:
-        results.append(
-            (
-                "午前試験 8:00",
-                int(morning.group(1))
+            # jQuery datepickerでは
+            # 選択できる日は基本的に<a>になる
+            clickable = (
+                info["links"] > 0
+                or info["buttons"] > 0
             )
-        )
 
-    afternoon = re.search(
-        r"午後試験"
-        r".{0,200}?"
-        r"11:00"
-        r".{0,200}?"
-        r"残り\s*(\d+)\s*名",
-        body,
-        re.S
-    )
+            if not clickable:
+                continue
 
-    if afternoon:
-        results.append(
-            (
-                "午後試験 11:00",
-                int(afternoon.group(1))
+            available.append(d)
+
+            print(
+                "✅ 選択可能:",
+                d.isoformat()
             )
-        )
 
-    return results
+        except Exception as e:
+            print(
+                "セル確認エラー:",
+                e
+            )
+
+    return available
 
 
 def scan_month(
@@ -449,8 +404,10 @@ def scan_month(
 ):
     print("")
     print(
-        f"===== {location} "
-        f"{year}/{month} ====="
+        f"===== "
+        f"{location} "
+        f"{year}/{month} "
+        f"====="
     )
 
     if not move_to_month(
@@ -460,96 +417,25 @@ def scan_month(
     ):
         raise Exception(
             f"{location}: "
-            f"{year}/{month}へ移動できません"
+            f"{year}/{month}へ"
+            "移動できません"
         )
 
-    today = datetime.now(
-        ZoneInfo("Asia/Tokyo")
-    ).date()
+    actual_year, actual_month = (
+        get_year_month(page)
+    )
 
-    available = []
+    print(
+        "表示中:",
+        actual_year,
+        actual_month
+    )
 
-    for day in range(1, 32):
-
-        try:
-            d = date(
-                year,
-                month,
-                day
-            )
-        except ValueError:
-            continue
-
-        # 過去日は不要
-        if d < today:
-            continue
-
-        # 10/14以降は不要
-        if d >= CUTOFF:
-            continue
-
-        element = find_clickable_day(
-            page,
-            day
-        )
-
-        if element is None:
-            continue
-
-        print(
-            f"{location} "
-            f"{d.isoformat()} "
-            "→ 日付選択可能"
-        )
-
-        try:
-            element.click()
-            page.wait_for_timeout(700)
-
-        except Exception as e:
-            print(
-                "日付クリック失敗:",
-                d,
-                e
-            )
-            continue
-
-        slots = read_remaining_slots(
-            page
-        )
-
-        if not slots:
-            print(
-                "  残席情報を取得できません"
-            )
-            continue
-
-        for time_name, remaining in slots:
-
-            print(
-                f"  {time_name}: "
-                f"残り{remaining}名"
-            )
-
-            if remaining > 0:
-
-                available.append(
-                    {
-                        "location":
-                            location,
-
-                        "date":
-                            d,
-
-                        "time":
-                            time_name,
-
-                        "remaining":
-                            remaining
-                    }
-                )
-
-    return available
+    return get_available_days(
+        page,
+        year,
+        month
+    )
 
 
 def check_location(
@@ -561,9 +447,7 @@ def check_location(
             "width": 1280,
             "height": 1200
         },
-
         locale="ja-JP",
-
         user_agent=(
             "Mozilla/5.0 "
             "(Windows NT 10.0; Win64; x64) "
@@ -577,30 +461,31 @@ def check_location(
     page = context.new_page()
 
     try:
-        setup_to_location(
+
+        setup_calendar(
             page,
             location
         )
 
-        results = []
+        dates = []
 
-        # 9月全体
-        results += scan_month(
+        # 9月
+        dates += scan_month(
             page,
             location,
             2026,
             9
         )
 
-        # 10/1～10/13
-        results += scan_month(
+        # 10/1～13
+        dates += scan_month(
             page,
             location,
             2026,
             10
         )
 
-        return results, None
+        return dates, None
 
     except Exception as e:
 
@@ -608,14 +493,14 @@ def check_location(
         print(
             f"❌ {location} エラー:"
         )
+
         print(e)
 
         try:
-            print("")
             print(
                 page.locator(
                     "body"
-                ).inner_text()[:5000]
+                ).inner_text()[:3000]
             )
         except Exception:
             pass
@@ -627,7 +512,8 @@ def check_location(
 
 
 def main():
-    all_slots = []
+
+    found = []
     errors = []
 
     with sync_playwright() as p:
@@ -638,14 +524,22 @@ def main():
 
         for location in LOCATIONS:
 
-            slots, error = check_location(
-                browser,
-                location
+            dates, error = (
+                check_location(
+                    browser,
+                    location
+                )
             )
 
-            all_slots.extend(
-                slots
-            )
+            for d in dates:
+                found.append(
+                    {
+                        "location":
+                            location,
+                        "date":
+                            d
+                    }
+                )
 
             if error:
                 errors.append(
@@ -659,68 +553,92 @@ def main():
     print("最終結果")
     print("======================")
 
-    # 3会場全部失敗した場合、
-    # 「空きなし」と誤表示せず
-    # GitHub Actions自体をエラーにする
+    # 全部失敗した場合
     if len(errors) == len(LOCATIONS):
 
         print(
-            "❌ 全試験場の確認に失敗しました"
+            "❌ 全会場の監視に失敗"
         )
 
-        for error in errors:
-            print(error)
+        for e in errors:
+            print(e)
 
         raise Exception(
             "予約サイトの監視に失敗しました"
         )
 
+    # 一部だけ失敗
     if errors:
-        print("")
-        print("一部エラーあり:")
 
-        for error in errors:
-            print(error)
+        print("一部会場でエラー:")
 
-    if not all_slots:
+        for e in errors:
+            print(e)
 
-        print("")
+    # 空きなし
+    if not found:
+
         print(
-            "正常に確認できた試験場では、"
-            "10/14より前の残席はありません"
+            "✅ 正常に確認完了"
+        )
+
+        print(
+            "現在、10/14より前の"
+            "空きはありません"
         )
 
         return
 
-    # 日付順に並べる
-    all_slots.sort(
+    # 重複除去
+    unique = {}
+
+    for item in found:
+
+        key = (
+            item["location"],
+            item["date"]
+        )
+
+        unique[key] = item
+
+    found = list(
+        unique.values()
+    )
+
+    found.sort(
         key=lambda x: (
             x["date"],
-            x["location"],
-            x["time"]
+            x["location"]
         )
     )
 
+    print("")
+    print("🚨 空き発見")
+
     lines = [
-        "🚨 本免学科試験の早い空きが出ています！",
+        "🚨 本免学科試験の"
+        "早い空きが出ています！",
         ""
     ]
 
-    for slot in all_slots:
+    for item in found:
 
-        d = slot["date"]
+        d = item["date"]
 
-        lines.append(
-            f"✅ {slot['location']} "
-            f"{d.month}/{d.day} "
-            f"{slot['time']} "
-            f"残り{slot['remaining']}名"
+        line = (
+            f"✅ {item['location']} "
+            f"{d.month}/{d.day}"
         )
+
+        print(line)
+
+        lines.append(line)
 
     lines += [
         "",
         "10/14より前の枠です。",
-        "すぐ予約サイトを確認してください。",
+        "すぐ予約サイトを"
+        "確認してください。",
         START_URL
     ]
 
