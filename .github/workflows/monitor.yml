@@ -3,10 +3,6 @@ name: 本免キャンセル監視
 on:
   workflow_dispatch:
 
-  # 5分ごと
-  schedule:
-    - cron: "2,7,12,17,22,27,32,37,42,47,52,57 * * * *"
-
 permissions:
   contents: read
 
