@@ -2,6 +2,14 @@ name: 本免キャンセル監視
 
 on:
   workflow_dispatch:
+    inputs:
+      operation:
+        description: 実行する処理
+        type: choice
+        options:
+          - monitor
+          - check_profile
+        default: monitor
 
 permissions:
   contents: read
@@ -40,7 +48,14 @@ jobs:
       - name: 回帰テスト
         run: python -m unittest -v
 
+      - name: 申込情報の設定を確認
+        if: inputs.operation == 'check_profile'
+        env:
+          APPLICANT_JSON: ${{ secrets.APPLICANT_JSON }}
+        run: python autofill.py --check-profile
+
       - name: 予約状況チェック
+        if: inputs.operation != 'check_profile'
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           MONITOR_END_DATE: "2026-12-31"

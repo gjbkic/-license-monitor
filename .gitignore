@@ -1,3 +1,5 @@
 __pycache__/
 .monitor_state.json
 diagnostics/
+applicant.local.json
+.env
