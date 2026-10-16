@@ -13,7 +13,7 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 8
 
     steps:
       - name: コード取得
@@ -40,6 +40,7 @@ jobs:
       - name: 予約状況チェック
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          MONITOR_DAYS_AHEAD: "45"
         run: python monitor.py
 
       - name: 今回状態を保存
