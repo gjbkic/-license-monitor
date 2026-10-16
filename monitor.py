@@ -18,8 +18,9 @@ START_URL = (
     "police-pref-tokyo/index_000.html"
 )
 
-# この日まで通知対象（10/9を含む）
-LATEST_ALERT_DATE = date(2026, 10, 9)
+# 明日から何日先まで監視するか。
+# GitHub Actions側で MONITOR_DAYS_AHEAD を設定すれば変更できます。
+MONITOR_DAYS_AHEAD = int(os.environ.get("MONITOR_DAYS_AHEAD", "45"))
 
 LOCATIONS = [
     "府中試験場",
@@ -595,6 +596,8 @@ def setup_calendar(
         f"{year}-{month:02d}"
     )
 
+    return year, month
+
 
 # ============================================================
 # 月移動
@@ -845,60 +848,64 @@ def get_day_cell_info(
 
 def read_remaining_slots(page):
 
+    """
+    午前/午後の受付時刻を固定せずに残席を読む。
+    会場や運用変更で 8:00 / 11:00 以外になっても対応する。
+    """
+
     body = page.locator(
         "body"
     ).inner_text()
 
     results = []
 
-    definitions = [
-        (
-            "午前試験 8:00",
-            "午前試験",
-            "8:00"
-        ),
+    pattern = re.compile(
+        r"(午前試験|午後試験)"
+        r".{0,160}?"
+        r"受付時間\s*([0-9]{1,2}:[0-9]{2})"
+        r".{0,220}?"
+        r"残り\s*(\d+)\s*名",
+        re.S
+    )
 
-        (
-            "午後試験 11:00",
-            "午後試験",
-            "11:00"
-        )
-    ]
+    for match in pattern.finditer(body):
 
-    for (
-        label,
-        section,
-        time_text
-    ) in definitions:
+        results.append(
+            {
+                "time":
+                    f"{match.group(1)} {match.group(2)}",
 
-        pattern = (
-            re.escape(section)
-            + r".{0,400}?"
-            + re.escape(time_text)
-            + r".{0,400}?"
-            + r"残り\s*(\d+)\s*名"
+                "remaining":
+                    int(match.group(3))
+            }
         )
 
-        match = re.search(
-            pattern,
-            body,
+    # 表記変更時の保険
+    if not results:
+
+        fallback = re.compile(
+            r"(午前試験|午後試験)"
+            r".{0,260}?"
+            r"残り\s*(\d+)\s*名",
             re.S
         )
 
-        if match:
+        for match in fallback.finditer(body):
 
             results.append(
                 {
-                    "time": label,
-
+                    "time": match.group(1),
                     "remaining":
-                        int(
-                            match.group(1)
-                        )
+                        int(match.group(2))
                 }
             )
 
-    return results
+    unique = {}
+
+    for item in results:
+        unique[item["time"]] = item
+
+    return list(unique.values())
 
 
 def wait_for_remaining_slots(page):
@@ -1102,6 +1109,11 @@ def scan_month(
         ZoneInfo("Asia/Tokyo")
     ).date()
 
+    latest_alert_date = (
+        today
+        + timedelta(days=MONITOR_DAYS_AHEAD)
+    )
+
     results = []
 
     checked_days = 0
@@ -1126,10 +1138,10 @@ def scan_month(
         if target_date <= today:
             continue
 
-        # 10/9より後は不要
+        # 今日から指定日数より先は不要
         if (
             target_date
-            > LATEST_ALERT_DATE
+            > latest_alert_date
         ):
             continue
 
@@ -1226,39 +1238,63 @@ def scan_location(
 
     try:
 
-        setup_calendar(
+        shown_year, shown_month = setup_calendar(
             page,
             guard,
             location
         )
 
+        today = datetime.now(
+            ZoneInfo("Asia/Tokyo")
+        ).date()
+
+        latest_alert_date = (
+            today
+            + timedelta(days=MONITOR_DAYS_AHEAD)
+        )
+
         results = []
 
-        # 必ず9月確認
-        september = scan_month(
-            page,
-            guard,
-            location,
-            2026,
-            9
-        )
+        # 過去月には戻らない。
+        # 以前は9月・10月を固定で見ていたため、
+        # 10月に入った後も9月へ戻ろうとして失敗していた。
+        year = shown_year
+        month = shown_month
 
-        results.extend(
-            september
-        )
+        for _ in range(12):
 
-        # 必ず10月確認
-        october = scan_month(
-            page,
-            guard,
-            location,
-            2026,
-            10
-        )
+            month_first = date(
+                year,
+                month,
+                1
+            )
 
-        results.extend(
-            october
-        )
+            if month_first > latest_alert_date:
+                break
+
+            month_results = scan_month(
+                page,
+                guard,
+                location,
+                year,
+                month
+            )
+
+            results.extend(
+                month_results
+            )
+
+            if (
+                year == latest_alert_date.year
+                and month == latest_alert_date.month
+            ):
+                break
+
+            month += 1
+
+            if month == 13:
+                month = 1
+                year += 1
 
         print("")
         print(
@@ -1266,79 +1302,13 @@ def scan_location(
         )
         print(
             f"✅ {location}: "
-            "9月・10月とも確認完了"
+            f"明日〜{latest_alert_date} 確認完了"
         )
         print(
             "================================"
         )
 
         return results
-
-    finally:
-        context.close()
-
-
-# ============================================================
-# 5秒後の再確認
-# ============================================================
-
-def recheck_slot(
-    browser,
-    slot
-):
-
-    context = create_context(
-        browser
-    )
-
-    page = context.new_page()
-
-    guard = AccessGuard()
-
-    page.on(
-        "response",
-        guard.on_response
-    )
-
-    try:
-
-        setup_calendar(
-            page,
-            guard,
-            slot["location"]
-        )
-
-        print("")
-        print(
-            f"🔁 再確認: "
-            f"{slot['location']} "
-            f"{slot['date'].month}/"
-            f"{slot['date'].day} "
-            f"{slot['time']}"
-        )
-
-        results = inspect_date(
-            page,
-            guard,
-            slot["date"]
-        )
-
-        for result in results:
-
-            if (
-                result["time"]
-                == slot["time"]
-            ):
-
-                result[
-                    "location"
-                ] = slot[
-                    "location"
-                ]
-
-                return result
-
-        return None
 
     finally:
         context.close()
@@ -1422,8 +1392,8 @@ def main():
                     "################################"
                 )
                 print(
-                    "✅ 3会場 × 9月・10月 "
-                    "すべて確認完了"
+                    "✅ 3会場すべて "
+                    "監視対象期間の確認完了"
                 )
                 print(
                     "################################"
@@ -1442,54 +1412,45 @@ def main():
                 # 空き発見
                 # --------------------------------------------
 
+                # ここに来る時点で、日付を実際にクリックして
+                # 「残り1名以上」まで確認済み。
+                # 5秒の再確認は行わず、すぐ通知する。
+                location_order = {
+                    name: i
+                    for i, name in enumerate(LOCATIONS)
+                }
+
+                all_slots.sort(
+                    key=lambda x: (
+                        x["date"],
+                        location_order.get(
+                            x["location"],
+                            999
+                        ),
+                        x["time"]
+                    )
+                )
+
+                lines = [
+                    "🚨【本免学科試験】残席を検知！",
+                    ""
+                ]
+
                 for slot in all_slots:
-
-                    send_discord(
-                        "🚨【速報】"
-                        "本免学科試験の空きを検知！\n\n"
-                        + slot_line(slot)
-                        + "\n\n"
-                        + f"{RECHECK_SECONDS}秒後に"
-                        "自動再確認します。\n"
-                        + START_URL
+                    lines.append(
+                        slot_line(slot)
                     )
 
-                    time.sleep(
-                        RECHECK_SECONDS
-                    )
+                lines += [
+                    "",
+                    "日付を実際にクリックして"
+                    "「残り1名以上」まで確認済みです。",
+                    START_URL
+                ]
 
-                    confirmed = (
-                        recheck_slot(
-                            browser,
-                            slot
-                        )
-                    )
-
-                    if confirmed:
-
-                        send_discord(
-                            "✅【再確認OK】"
-                            f"{RECHECK_SECONDS}秒後も"
-                            "残席あり！\n\n"
-                            + slot_line(
-                                confirmed
-                            )
-                            + "\n\n"
-                            + "すぐ予約してください。\n"
-                            + START_URL
-                        )
-
-                    else:
-
-                        send_discord(
-                            "⚠️【再確認】"
-                            f"{RECHECK_SECONDS}秒後には"
-                            "残席がなくなっていました。\n\n"
-                            + slot_line(slot)
-                            + "\n\n"
-                            + "一瞬のキャンセル枠だった"
-                            "可能性があります。"
-                        )
+                send_discord(
+                    "\n".join(lines)
+                )
 
             finally:
                 browser.close()
