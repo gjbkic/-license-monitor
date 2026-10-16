@@ -3,3 +3,4 @@ __pycache__/
 diagnostics/
 applicant.local.json
 .env
+public-diagnostics/
