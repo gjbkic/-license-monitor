@@ -89,6 +89,23 @@ class MonitorTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'Discord通知を送信できませんでした'):
                 monitor.send_discord('test')
 
+    def test_missing_required_script_is_load_failure_not_empty_calendar(self):
+        guard = monitor.AccessGuard()
+        response = MagicMock(status=404, url='https://license-test.tokyo-madoguchi-yoyaku.com/script.js?private=ignored')
+        response.request.resource_type = 'script'
+        guard.on_response(response)
+        with self.assertRaisesRegex(monitor.ScanError, 'HTTP 404') as error:
+            guard.check(MagicMock())
+        self.assertNotIn('private', str(error.exception))
+        self.assertIsNone(guard.block)
+
+    def test_missing_image_does_not_block_calendar(self):
+        guard = monitor.AccessGuard()
+        response = MagicMock(status=404, url='https://example.com/logo.png')
+        response.request.resource_type = 'image'
+        guard.on_response(response)
+        self.assertEqual(guard.load_errors, [])
+
     def test_access_block_is_failure_exit(self):
         with patch.object(monitor, 'sync_playwright', side_effect=monitor.AccessBlocked(429, 'rate limit')), \
              patch.object(monitor, 'load_state', return_value=monitor.default_state()), \

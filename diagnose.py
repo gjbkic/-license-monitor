@@ -3,7 +3,7 @@ import json
 from pathlib import Path
 from urllib.parse import urlsplit
 from playwright.sync_api import sync_playwright
-from monitor import START_URL
+from site_entry import OFFICIAL_URL, discover_booking_entry
 
 
 OUT = Path('public-diagnostics')
@@ -31,13 +31,13 @@ def main():
             {'url': safe_url(request.url), 'failure': request.failure}))
         page.on('pageerror', lambda error: console.append(str(error)[:300]))
         try:
-            page.goto(START_URL, wait_until='domcontentloaded', timeout=60000)
+            page.goto(discover_booking_entry(), wait_until='domcontentloaded', timeout=60000)
             page.get_by_text('学科試験の予約はこちら', exact=True).click(timeout=30000)
             try:
                 page.get_by_text('手続を開始する', exact=True).wait_for(state='visible', timeout=30000)
             except Exception:
                 pass
-            details = {'url': safe_url(page.url), 'title': page.title(),
+            details = {'official_source': OFFICIAL_URL, 'entry': discover_booking_entry(), 'url': safe_url(page.url), 'title': page.title(),
                        'body': page.locator('body').inner_text()[:20000]}
             scripts = page.locator('script[src]').evaluate_all('(els)=>els.map(el=>el.src)')
             details['scripts'] = [safe_url(url) for url in scripts]

@@ -4,7 +4,7 @@ import re
 from urllib.parse import urlsplit
 from playwright.sync_api import sync_playwright
 from applicant import load_applicant, ProfileError
-from monitor import START_URL
+from site_entry import discover_booking_entry, SiteEntryError
 
 ALLOWED_HOSTS = {
     'license-renew.tokyo-madoguchi-yoyaku.com',
@@ -112,7 +112,7 @@ def main():
         try:
             context = browser.new_context(locale='ja-JP')
             page = context.new_page()
-            page.goto(START_URL, wait_until='domcontentloaded')
+            page.goto(discover_booking_entry(), wait_until='domcontentloaded')
             print('ブラウザで利用規約・手続区分を確認し、予約者情報の入力画面まで進んでください。')
             input('予約者情報の画面を開いたら、この端末でEnterを押してください: ')
             fill_applicant(page, applicant)
@@ -125,7 +125,7 @@ def main():
 if __name__ == '__main__':
     try:
         main()
-    except (ProfileError, FormError) as error:
+    except (ProfileError, FormError, SiteEntryError) as error:
         print(str(error))
         raise SystemExit(1)
     except (EOFError, KeyboardInterrupt):

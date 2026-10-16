@@ -4,3 +4,5 @@ diagnostics/
 applicant.local.json
 .env
 public-diagnostics/
+.booking_state.json
+.booking_state.tmp

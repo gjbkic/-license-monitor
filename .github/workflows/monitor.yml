@@ -1,6 +1,8 @@
 name: 本免キャンセル監視
 
 on:
+  schedule:
+    - cron: '2,7,12,17,22,27,32,37,42,47,52,57 * * * *'
   workflow_dispatch:
     inputs:
       operation:
@@ -9,6 +11,7 @@ on:
         options:
           - monitor
           - check_profile
+          - auto_reserve
         default: monitor
 
 permissions:
@@ -16,10 +19,11 @@ permissions:
 
 concurrency:
   group: license-monitor
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   monitor:
+    if: github.event_name == 'workflow_dispatch' || vars.AUTO_RESERVE_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -30,7 +34,9 @@ jobs:
       - name: 前回状態を復元
         uses: actions/cache/restore@v4
         with:
-          path: .monitor_state.json
+          path: |
+            .monitor_state.json
+            .booking_state.json
           key: monitor-state-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             monitor-state-
@@ -55,17 +61,29 @@ jobs:
         run: python autofill.py --check-profile
 
       - name: 予約状況チェック
-        if: inputs.operation != 'check_profile'
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'monitor'
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
           MONITOR_END_DATE: "2026-12-31"
         run: python monitor.py
 
+      - name: 本人情報で自動予約
+        if: inputs.operation == 'auto_reserve' || github.event_name == 'schedule'
+        env:
+          APPLICANT_JSON: ${{ secrets.APPLICANT_JSON }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          AUTO_RESERVE_ENABLED: ${{ vars.AUTO_RESERVE_ENABLED }}
+          BOOKING_TERMS_ACCEPTED: ${{ vars.BOOKING_TERMS_ACCEPTED }}
+          MONITOR_END_DATE: '2026-12-31'
+        run: python auto_reserve.py
+
       - name: 今回状態を保存
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: .monitor_state.json
+          path: |
+            .monitor_state.json
+            .booking_state.json
           key: monitor-state-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: 障害情報を保存

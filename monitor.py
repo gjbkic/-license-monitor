@@ -8,6 +8,7 @@ import requests
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright
+from site_entry import discover_booking_entry, SiteEntryError
 
 
 # ============================================================
@@ -91,11 +92,14 @@ class ScanError(Exception):
 class AccessGuard:
     def __init__(self):
         self.block = None
+        self.load_errors = []
 
     def on_response(self, response):
         try:
             status = response.status
             resource_type = response.request.resource_type
+            if status in (404, 500, 502, 503, 504) and resource_type in ("document", "script", "stylesheet"):
+                self.load_errors.append((status, resource_type, urlsplit(response.url).path))
 
             if status == 429:
                 self.block = (
@@ -123,6 +127,9 @@ class AccessGuard:
         if self.block:
             status, reason = self.block
             raise AccessBlocked(status, reason)
+        if self.load_errors:
+            status, resource_type, path = self.load_errors[0]
+            raise ScanError(f"予約画面の読込失敗: HTTP {status} ({resource_type}) {path}")
 
         try:
             body = page.locator("body").inner_text(
@@ -367,14 +374,6 @@ def create_context(browser):
 
         locale="ja-JP",
 
-        user_agent=(
-            "Mozilla/5.0 "
-            "(Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/128.0.0.0 "
-            "Safari/537.36"
-        )
     )
 
     # 画像・フォント・動画だけカット。
@@ -500,8 +499,12 @@ def setup_calendar(
         "================================"
     )
 
+    try:
+        entry_url = discover_booking_entry()
+    except SiteEntryError as error:
+        raise ScanError(str(error)) from None
     response = page.goto(
-        START_URL,
+        entry_url,
         wait_until="domcontentloaded",
         timeout=60000
     )
@@ -516,7 +519,7 @@ def setup_calendar(
         ):
             raise AccessBlocked(
                 response.status,
-                f"HTTP {response.status}\n{START_URL}"
+                f"HTTP {response.status}\n{entry_url}"
             )
 
     guard.check(page)
