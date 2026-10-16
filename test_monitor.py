@@ -29,6 +29,21 @@ class MonitorTests(unittest.TestCase):
             with self.assertRaisesRegex(monitor.ScanError, '残り○名を取得できません'):
                 monitor.inspect_date(page, MagicMock(), date(2026, 10, 20))
 
+    def test_fixed_end_includes_december_and_excludes_january(self):
+        fixed_clock = MagicMock()
+        fixed_clock.now.return_value = datetime(2026, 10, 17)
+        with patch.dict(monitor.os.environ, {"MONITOR_END_DATE": "2026-12-31"}), \
+             patch.object(monitor, 'datetime', fixed_clock), \
+             patch.object(monitor, 'setup_calendar', return_value=(2026, 10)), \
+             patch.object(monitor, 'scan_month', return_value=[]) as scan:
+            monitor.scan_location(MagicMock(), '府中試験場')
+        self.assertEqual([(c.args[3], c.args[4]) for c in scan.call_args_list],
+                         [(2026, 10), (2026, 11), (2026, 12)])
+
+    def test_expired_fixed_end_does_not_roll_into_next_year(self):
+        with patch.dict(monitor.os.environ, {"MONITOR_END_DATE": "2026-12-31"}):
+            self.assertLess(monitor.monitor_end_date(date(2027, 1, 1)), date(2027, 1, 1))
+
     def test_current_month_never_scans_fixed_september(self):
         browser = MagicMock()
         fixed_clock = MagicMock()

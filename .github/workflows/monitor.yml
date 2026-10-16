@@ -43,7 +43,7 @@ jobs:
       - name: 予約状況チェック
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          MONITOR_DAYS_AHEAD: "45"
+          MONITOR_END_DATE: "2026-12-31"
         run: python monitor.py
 
       - name: 今回状態を保存

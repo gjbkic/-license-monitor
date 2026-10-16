@@ -25,6 +25,13 @@ MONITOR_DAYS_AHEAD = int(os.environ.get("MONITOR_DAYS_AHEAD", "45"))
 if not 1 <= MONITOR_DAYS_AHEAD <= 90:
     raise ValueError("MONITOR_DAYS_AHEADは1〜90で指定してください")
 
+def monitor_end_date(today):
+    configured = os.environ.get("MONITOR_END_DATE", "").strip()
+    if configured:
+        return date.fromisoformat(configured)
+    return today + timedelta(days=MONITOR_DAYS_AHEAD)
+
+
 LOCATIONS = [
     "府中試験場",
     "鮫洲試験場",
@@ -1042,10 +1049,7 @@ def scan_month(
         ZoneInfo("Asia/Tokyo")
     ).date()
 
-    latest_alert_date = (
-        today
-        + timedelta(days=MONITOR_DAYS_AHEAD)
-    )
+    latest_alert_date = monitor_end_date(today)
 
     results = []
 
@@ -1182,10 +1186,7 @@ def scan_location(
             ZoneInfo("Asia/Tokyo")
         ).date()
 
-        latest_alert_date = (
-            today
-            + timedelta(days=MONITOR_DAYS_AHEAD)
-        )
+        latest_alert_date = monitor_end_date(today)
 
         results = []
 
