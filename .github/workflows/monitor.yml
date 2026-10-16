@@ -13,7 +13,7 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
 
     steps:
       - name: コード取得
@@ -23,7 +23,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: .monitor_state.json
-          key: monitor-state-${{ github.run_id }}
+          key: monitor-state-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             monitor-state-
 
@@ -37,6 +37,9 @@ jobs:
           pip install -r requirements.txt
           playwright install chromium --with-deps
 
+      - name: 回帰テスト
+        run: python -m unittest -v
+
       - name: 予約状況チェック
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
@@ -48,4 +51,13 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: .monitor_state.json
-          key: monitor-state-${{ github.run_id }}
+          key: monitor-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: 障害情報を保存
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitor-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: diagnostics/*.json
+          if-no-files-found: ignore
+          retention-days: 7
