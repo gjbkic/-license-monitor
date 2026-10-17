@@ -1,0 +1,9 @@
+__pycache__/
+.monitor_state.json
+diagnostics/
+applicant.local.json
+.applicant-*.tmp
+.env
+public-diagnostics/
+.booking_state.json
+.booking_state.tmp

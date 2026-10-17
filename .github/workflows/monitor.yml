@@ -1,19 +1,36 @@
 name: 本免キャンセル監視
 
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/monitor.yml']
+  schedule:
+    - cron: '2,7,12,17,22,27,32,37,42,47,52,57 * * * *'
   workflow_dispatch:
+    inputs:
+      operation:
+        description: 実行する処理
+        type: choice
+        options:
+          - monitor
+          - check_profile
+          - auto_reserve
+        default: auto_reserve
 
 permissions:
   contents: read
 
 concurrency:
   group: license-monitor
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   monitor:
+    if: github.event_name == 'workflow_dispatch' || vars.AUTO_RESERVE_ENABLED != 'false'
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 15
+    env:
+      BOOKING_USER_AGENT: ${{ vars.BOOKING_USER_AGENT }}
 
     steps:
       - name: コード取得
@@ -22,8 +39,10 @@ jobs:
       - name: 前回状態を復元
         uses: actions/cache/restore@v4
         with:
-          path: .monitor_state.json
-          key: monitor-state-${{ github.run_id }}
+          path: |
+            .monitor_state.json
+            .booking_state.json
+          key: monitor-state-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             monitor-state-
 
@@ -37,15 +56,53 @@ jobs:
           pip install -r requirements.txt
           playwright install chromium --with-deps
 
+      - name: 回帰テスト
+        run: python -m unittest -v
+
+      - name: 申込情報の設定を確認
+        if: inputs.operation == 'check_profile'
+        env:
+          APPLICANT_JSON: ${{ secrets.APPLICANT_JSON }}
+        run: python autofill.py --check-profile
+
       - name: 予約状況チェック
+        if: github.event_name == 'workflow_dispatch' && inputs.operation == 'monitor'
         env:
           DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
-          MONITOR_DAYS_AHEAD: "45"
+          MONITOR_END_DATE: "2026-12-31"
         run: python monitor.py
+
+      - name: 運用開始を通知
+        if: github.event_name == 'push'
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: >-
+          python -c "import monitor; monitor.send_discord('▶️ 本免の自動予約運用を開始しました。府中・鮫洲・江東を比較し、明日から2026年12月31日までで最も早い受験日を優先します。空き発見と予約取得成功を別々に通知します。')"
+
+      - name: 本人情報で自動予約
+        if: inputs.operation == 'auto_reserve' || github.event_name == 'schedule' || github.event_name == 'push'
+        env:
+          APPLICANT_JSON: ${{ secrets.APPLICANT_JSON }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          AUTO_RESERVE_ENABLED: ${{ vars.AUTO_RESERVE_ENABLED || 'true' }}
+          BOOKING_TERMS_ACCEPTED: ${{ vars.BOOKING_TERMS_ACCEPTED || 'true' }}
+          MONITOR_END_DATE: '2026-12-31'
+        run: python auto_reserve.py
 
       - name: 今回状態を保存
         if: always()
         uses: actions/cache/save@v4
         with:
-          path: .monitor_state.json
-          key: monitor-state-${{ github.run_id }}
+          path: |
+            .monitor_state.json
+            .booking_state.json
+          key: monitor-state-${{ github.run_id }}-${{ github.run_attempt }}
+
+      - name: 障害情報を保存
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitor-diagnostics-${{ github.run_id }}-${{ github.run_attempt }}
+          path: diagnostics/*.json
+          if-no-files-found: ignore
+          retention-days: 7

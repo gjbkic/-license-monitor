@@ -1,12 +1,15 @@
 import os
 import re
 import json
-import time
+from pathlib import Path
+from urllib.parse import urlsplit
 import requests
 
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright
+from site_entry import discover_booking_entry, SiteEntryError
+from browser_config import context_options
 
 
 # ============================================================
@@ -21,6 +24,15 @@ START_URL = (
 # 明日から何日先まで監視するか。
 # GitHub Actions側で MONITOR_DAYS_AHEAD を設定すれば変更できます。
 MONITOR_DAYS_AHEAD = int(os.environ.get("MONITOR_DAYS_AHEAD", "45"))
+if not 1 <= MONITOR_DAYS_AHEAD <= 90:
+    raise ValueError("MONITOR_DAYS_AHEADは1〜90で指定してください")
+
+def monitor_end_date(today):
+    configured = os.environ.get("MONITOR_END_DATE", "").strip()
+    if configured:
+        return date.fromisoformat(configured)
+    return today + timedelta(days=MONITOR_DAYS_AHEAD)
+
 
 LOCATIONS = [
     "府中試験場",
@@ -28,7 +40,6 @@ LOCATIONS = [
     "江東試験場",
 ]
 
-RECHECK_SECONDS = 5
 
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK")
 
@@ -56,10 +67,12 @@ def send_discord(message):
             timeout=15
         )
 
-        print("Discord status:", response.status_code)
+        response.raise_for_status()
+        print("Discord送信完了")
 
     except Exception as e:
-        print("Discord送信失敗:", e)
+        print("Discord送信失敗:", type(e).__name__)
+        raise RuntimeError("Discord通知を送信できませんでした") from None
 
 
 # ============================================================
@@ -80,11 +93,14 @@ class ScanError(Exception):
 class AccessGuard:
     def __init__(self):
         self.block = None
+        self.load_errors = []
 
     def on_response(self, response):
         try:
             status = response.status
             resource_type = response.request.resource_type
+            if status in (404, 500, 502, 503, 504) and resource_type in ("document", "script", "stylesheet"):
+                self.load_errors.append((status, resource_type, urlsplit(response.url).path))
 
             if status == 429:
                 self.block = (
@@ -112,6 +128,9 @@ class AccessGuard:
         if self.block:
             status, reason = self.block
             raise AccessBlocked(status, reason)
+        if self.load_errors:
+            status, resource_type, path = self.load_errors[0]
+            raise ScanError(f"予約画面の読込失敗: HTTP {status} ({resource_type}) {path}")
 
         try:
             body = page.locator("body").inner_text(
@@ -249,7 +268,7 @@ def register_block(state, status, reason):
             "⚠️【本免監視】"
             "403またはアクセス制限らしき応答を検知しました。\n\n"
             f"{reason}\n\n"
-            "休止はせず、次の5分監視で再試行します。"
+            "今回の処理を停止しました。次回実行時に再確認します。"
         )
 
         return
@@ -297,13 +316,13 @@ def register_block(state, status, reason):
 
     if cooldown_minutes == 0:
         action = (
-            "休止せず、次の5分監視で再試行します。"
+            "今回の処理を停止しました。次回実行時に再確認します。"
         )
 
     else:
         action = (
             f"{cooldown_minutes}分だけ休止して"
-            "自動再開します。"
+            "次回実行時に再確認します。"
         )
 
     send_discord(
@@ -338,7 +357,7 @@ def register_success(state):
         send_discord(
             "✅【本免監視】"
             "予約サイトへのアクセスが復旧しました。\n"
-            "通常の5分監視に戻ります。"
+            "今回の予約状況確認が完了しました。"
         )
 
 
@@ -354,16 +373,8 @@ def create_context(browser):
             "height": 1200
         },
 
-        locale="ja-JP",
+        **context_options(),
 
-        user_agent=(
-            "Mozilla/5.0 "
-            "(Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 "
-            "(KHTML, like Gecko) "
-            "Chrome/128.0.0.0 "
-            "Safari/537.36"
-        )
     )
 
     # 画像・フォント・動画だけカット。
@@ -403,52 +414,25 @@ def create_context(browser):
 # ページ操作
 # ============================================================
 
-def click_text(
-    page,
-    guard,
-    text
-):
-
-    print(f"クリック: {text}")
-
-    locator = page.get_by_text(
-        text,
-        exact=True
-    )
-
-    if locator.count() == 0:
-        raise ScanError(
-            f"「{text}」が見つかりません"
-        )
-
-    for i in range(
-        locator.count()
-    ):
-
-        element = locator.nth(i)
-
-        try:
-            if element.is_visible():
-
-                element.click()
-
-                page.wait_for_timeout(
-                    600
-                )
-
-                guard.check(page)
-
-                return
-
-        except AccessBlocked:
-            raise
-
-        except Exception:
-            pass
-
-    raise ScanError(
-        f"「{text}」をクリックできません"
-    )
+def click_text(page, guard, text):
+    print(f"クリック: {text}", flush=True)
+    try:
+        # SPAの読込完了前にcount()==0で失敗させない。
+        locator = page.get_by_text(text, exact=True).filter(visible=True)
+        locator.first.wait_for(state="visible", timeout=30000)
+        guard.check(page)
+        visible = [el for el in locator.all() if el.is_visible()]
+        if len(visible) != 1:
+            raise ScanError(f"「{text}」の表示候補が{len(visible)}件あります")
+        visible[0].click(timeout=15000)
+        guard.check(page)
+    except AccessBlocked:
+        raise
+    except ScanError:
+        raise
+    except Exception:
+        guard.check(page)
+        raise ScanError(f"「{text}」の表示またはクリックに失敗しました") from None
 
 
 def agree_terms(page):
@@ -457,14 +441,14 @@ def agree_terms(page):
         'input[name="TermsOfServiceCheck"]'
     ).first
 
-    if checkbox.count() == 0:
-        raise ScanError(
-            "利用規約チェックが見つかりません"
-        )
-
-    checkbox.evaluate(
-        "el => el.click()"
-    )
+    checkbox.wait_for(state="attached", timeout=30000)
+    if not checkbox.is_checked():
+        if checkbox.is_visible():
+            checkbox.check()
+        else:
+            # The site's styled checkbox hides the native input. Click its
+            # visible consent text rather than waiting for that input to show.
+            page.get_by_text('「利用規約について」を読み、同意しました。', exact=True).click(timeout=15000)
 
     page.wait_for_timeout(300)
 
@@ -485,10 +469,11 @@ def get_year_month(page):
         "body"
     ).inner_text()
 
+    header = page.locator(".ui-datepicker-title").first
+    if header.count() and header.is_visible():
+        body = header.inner_text()
     match = re.search(
-        r"(20\d{2})\s*年\s*"
-        r"(\d{1,2})\s*月",
-        body
+        r"(20\d{2})\s*年\s*(\d{1,2})\s*月", body
     )
 
     if not match:
@@ -521,8 +506,12 @@ def setup_calendar(
         "================================"
     )
 
+    try:
+        entry_url = discover_booking_entry()
+    except SiteEntryError as error:
+        raise ScanError(str(error)) from None
     response = page.goto(
-        START_URL,
+        entry_url,
         wait_until="domcontentloaded",
         timeout=60000
     )
@@ -537,7 +526,7 @@ def setup_calendar(
         ):
             raise AccessBlocked(
                 response.status,
-                f"HTTP {response.status}\n{START_URL}"
+                f"HTTP {response.status}\n{entry_url}"
             )
 
     guard.check(page)
@@ -580,6 +569,12 @@ def setup_calendar(
         location
     )
 
+    # Venue selection starts an asynchronous calendar request.
+    # Its DOM may exist while still hidden; wait for the rendered calendar.
+    page.locator('.ui-datepicker-calendar').filter(visible=True).wait_for(
+        state='visible', timeout=30000
+    )
+    guard.check(page)
     year, month = get_year_month(
         page
     )
@@ -846,66 +841,26 @@ def get_day_cell_info(
 # 残席読み取り
 # ============================================================
 
+def parse_remaining_slots(body):
+    """午前・午後の境界を越えて別枠の残席を対応付けない。"""
+    headings = list(re.finditer(r"午前試験|午後試験", body))
+    results = {}
+    for index, heading in enumerate(headings):
+        end = headings[index + 1].start() if index + 1 < len(headings) else len(body)
+        section = body[heading.end():end]
+        remaining = re.search(r"残り\s*([0-9]+)\s*名", section)
+        if not remaining:
+            continue
+        reception = re.search(r"受付時間\s*([0-9]{1,2}:[0-9]{2})", section)
+        label = heading.group()
+        if reception:
+            label += " " + reception.group(1)
+        results[label] = {"time": label, "remaining": int(remaining.group(1))}
+    return list(results.values())
+
+
 def read_remaining_slots(page):
-
-    """
-    午前/午後の受付時刻を固定せずに残席を読む。
-    会場や運用変更で 8:00 / 11:00 以外になっても対応する。
-    """
-
-    body = page.locator(
-        "body"
-    ).inner_text()
-
-    results = []
-
-    pattern = re.compile(
-        r"(午前試験|午後試験)"
-        r".{0,160}?"
-        r"受付時間\s*([0-9]{1,2}:[0-9]{2})"
-        r".{0,220}?"
-        r"残り\s*(\d+)\s*名",
-        re.S
-    )
-
-    for match in pattern.finditer(body):
-
-        results.append(
-            {
-                "time":
-                    f"{match.group(1)} {match.group(2)}",
-
-                "remaining":
-                    int(match.group(3))
-            }
-        )
-
-    # 表記変更時の保険
-    if not results:
-
-        fallback = re.compile(
-            r"(午前試験|午後試験)"
-            r".{0,260}?"
-            r"残り\s*(\d+)\s*名",
-            re.S
-        )
-
-        for match in fallback.finditer(body):
-
-            results.append(
-                {
-                    "time": match.group(1),
-                    "remaining":
-                        int(match.group(2))
-                }
-            )
-
-    unique = {}
-
-    for item in results:
-        unique[item["time"]] = item
-
-    return list(unique.values())
+    return parse_remaining_slots(page.locator("body").inner_text())
 
 
 def wait_for_remaining_slots(page):
@@ -1068,7 +1023,8 @@ def scan_month(
     guard,
     location,
     year,
-    month
+    month,
+    on_slot=None,
 ):
 
     print("")
@@ -1109,10 +1065,7 @@ def scan_month(
         ZoneInfo("Asia/Tokyo")
     ).date()
 
-    latest_alert_date = (
-        today
-        + timedelta(days=MONITOR_DAYS_AHEAD)
-    )
+    latest_alert_date = monitor_end_date(today)
 
     results = []
 
@@ -1186,9 +1139,9 @@ def scan_month(
                 "location"
             ] = location
 
-            results.append(
-                slot
-            )
+            results.append(slot)
+            if on_slot:
+                on_slot(slot)
 
     print("")
     print(
@@ -1220,7 +1173,8 @@ def scan_month(
 
 def scan_location(
     browser,
-    location
+    location,
+    on_slot=None,
 ):
 
     context = create_context(
@@ -1248,10 +1202,7 @@ def scan_location(
             ZoneInfo("Asia/Tokyo")
         ).date()
 
-        latest_alert_date = (
-            today
-            + timedelta(days=MONITOR_DAYS_AHEAD)
-        )
+        latest_alert_date = monitor_end_date(today)
 
         results = []
 
@@ -1277,7 +1228,8 @@ def scan_location(
                 guard,
                 location,
                 year,
-                month
+                month,
+                on_slot=on_slot,
             )
 
             results.extend(
@@ -1310,8 +1262,29 @@ def scan_location(
 
         return results
 
+    except Exception as error:
+        save_diagnostic(page, location, error)
+        raise
     finally:
         context.close()
+
+
+def save_diagnostic(page, location, error):
+    """個人情報入力前の監視画面の障害情報だけを残す。"""
+    folder = Path("diagnostics")
+    folder.mkdir(exist_ok=True)
+    record = {"location": location, "error_type": type(error).__name__}
+    try:
+        # クエリにセッション情報が含まれる可能性があるため除外。
+        record["path"] = urlsplit(page.url).path
+        record["title"] = page.title()
+        record["calendar_visible"] = page.locator(".ui-datepicker-calendar").first.is_visible()
+        record["visible_text_length"] = len(page.locator("body").inner_text(timeout=2000))
+    except Exception:
+        record["page_unavailable"] = True
+    (folder / f"{location}.json").write_text(
+        json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 # ============================================================
@@ -1354,20 +1327,31 @@ def main():
             try:
 
                 all_slots = []
+                notified = set()
+
+                def notify_slot(slot):
+                    key = (slot["location"], slot["date"], slot["time"])
+                    if key in notified:
+                        return
+                    send_discord(
+                        "🚨【本免学科試験・残席あり】\n"
+                        + slot_line(slot)
+                        + "\n予約はまだ取得していません。\n" + START_URL
+                    )
+                    notified.add(key)
 
                 completed_locations = 0
+                failed_locations = []
 
                 for location in LOCATIONS:
 
-                    slots = scan_location(
-                        browser,
-                        location
-                    )
-
-                    all_slots.extend(
-                        slots
-                    )
-
+                    try:
+                        slots = scan_location(browser, location, on_slot=notify_slot)
+                    except ScanError as error:
+                        failed_locations.append(f"{location}: {error}")
+                        print(failed_locations[-1], flush=True)
+                        continue
+                    all_slots.extend(slots)
                     completed_locations += 1
 
                 # 3会場全部終わっていなければ
@@ -1378,8 +1362,8 @@ def main():
                 ):
 
                     raise ScanError(
-                        "全3会場の確認が"
-                        "完了していません"
+                        "全3会場の確認が完了していません: "
+                        + "; ".join(failed_locations)
                     )
 
                 # 全会場・全対象月確認成功
@@ -1408,49 +1392,7 @@ def main():
 
                     return
 
-                # --------------------------------------------
-                # 空き発見
-                # --------------------------------------------
-
-                # ここに来る時点で、日付を実際にクリックして
-                # 「残り1名以上」まで確認済み。
-                # 5秒の再確認は行わず、すぐ通知する。
-                location_order = {
-                    name: i
-                    for i, name in enumerate(LOCATIONS)
-                }
-
-                all_slots.sort(
-                    key=lambda x: (
-                        x["date"],
-                        location_order.get(
-                            x["location"],
-                            999
-                        ),
-                        x["time"]
-                    )
-                )
-
-                lines = [
-                    "🚨【本免学科試験】残席を検知！",
-                    ""
-                ]
-
-                for slot in all_slots:
-                    lines.append(
-                        slot_line(slot)
-                    )
-
-                lines += [
-                    "",
-                    "日付を実際にクリックして"
-                    "「残り1名以上」まで確認済みです。",
-                    START_URL
-                ]
-
-                send_discord(
-                    "\n".join(lines)
-                )
+                print(f"残席通知済み: {len(notified)}枠")
 
             finally:
                 browser.close()
@@ -1463,7 +1405,7 @@ def main():
             e.reason
         )
 
-        return
+        raise SystemExit(2)
 
     except Exception as e:
 

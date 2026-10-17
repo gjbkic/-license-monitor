@@ -1,0 +1,39 @@
+name: 本人情報の設定確認（予約なし）
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - applicant.py
+      - .github/workflows/check-profile.yml
+
+permissions:
+  contents: read
+
+jobs:
+  check-profile:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Secretを読み込んで形式だけ確認
+        env:
+          APPLICANT_JSON: ${{ secrets.APPLICANT_JSON }}
+        run: |
+          python - <<'PY'
+          import os
+          from applicant import load_applicant, ProfileError
+          if not os.environ.get('APPLICANT_JSON', '').strip():
+              raise SystemExit('APPLICANT_JSON Secretが未設定または空欄です。')
+          try:
+              load_applicant()
+          except ProfileError as error:
+              raise SystemExit(str(error)) from None
+          except Exception:
+              raise SystemExit('本人情報の設定確認に失敗しました。値は表示しません。') from None
+          print('APPLICANT_JSONの読込・4項目の形式確認に成功しました。予約サイトへの送信・予約処理は実行していません。')
+          PY

@@ -1,1 +1,84 @@
-# -license-monitor
+# 本免キャンセル監視・自動予約
+
+府中・鮫洲・江東の空きを比較し、明日から2026年12月31日までで最も早い受験日を優先します。
+同じ日なら受付時刻の早い枠を優先します。登録した本人情報で予約を確定し、1件取得したら新たな予約は作りません。
+
+## 運用と通知
+
+利用者の開始指示と利用規約への同意に基づき、自動予約を既定で有効にしています。
+mainへの運用workflow反映時に初回実行し、以降は約5分ごとに実行します。
+GitHub Actionsの定期実行は遅れる場合があります。
+
+通知先はSecret `DISCORD_WEBHOOK` に登録されたDiscordチャンネルです。
+運用開始、空き発見、予約取得成功を通知します。「空き発見」は予約成功を意味しません。
+成功通知には受験日・会場・12桁の受付番号を含みます。受付番号の平文は実行ログへ出しません。
+
+停止するには Settings → Secrets and variables → Actions → Variables で
+`AUTO_RESERVE_ENABLED=false` を設定してください。`BOOKING_TERMS_ACCEPTED=false` でも予約処理は停止します。
+これらの変数が未設定の場合は、今回の開始指示に基づきtrueを使用します。
+実行中のジョブを予約送信中に中断した場合は、公式サイトで結果を確認してください。
+
+手動実行は Actions → 本免キャンセル監視 → Run workflow。
+operationの `auto_reserve` は予約確定まで、`monitor` は空き確認のみ、
+`check_profile` は本人情報の形式確認のみです。
+
+## 登録済み本人情報
+
+Secretsの `APPLICANT_JSON` を使用します。更新する場合は正式な本人情報を次の形式で保存します。
+
+```json
+{
+  "name_kana": "",
+  "birth_date": "",
+  "phone": "",
+  "certificate_number": ""
+}
+```
+
+氏名はカナ、生年月日はYYYY-MM-DD、電話番号は半角数字10〜11桁、
+証明書番号は卒業証明書等の正式な番号です。番号は先頭の0を保持するため文字列で保存します。
+架空番号で実際の枠を確保する処理はありません。コード・ログ・workflow入力欄へ本人情報を書かないでください。
+
+## 確定と重複防止
+
+全会場の最短候補を取得し、日時順に予約を試みます。
+会場の読み取りが失敗した場合は、空きなしと判定せず停止します。
+予約確認画面の会場・日付・試験時刻・氏名・証明書番号を照合してから、確定を1回送信します。
+完了画面と12桁の受付番号を確認した場合だけ取得成功として通知します。
+
+送信前に `.booking_state.json` をsubmittingとして保存します。
+結果不明の場合は次回の再送を止めます。成功後は新たな予約を作らず、未送信の成功通知だけを再試行します。
+状態はActionsキャッシュへ保存し、受付番号はWebhookから導出したキーで暗号化します。
+Webhookを変更すると保存済み受付番号を復号できません。
+runner強制終了やキャッシュ保存失敗では状態が引き継がれない可能性があります。
+その場合も既存予約エラーを回避して予約する処理はありません。
+取消しや予約の差し替えは行いません。
+
+## 検証状況
+
+2026年10月17日のActionsで、入口・必要スクリプトの200応答、規約への同意、
+本人情報4項目・6欄の入力照合、本人情報の確認を通過して予約用カレンダーへ進むことを確認しました。
+Discord Webhookの有効性も確認済みです。
+公開カレンダーが非同期で表示される前に年月を読んでいた障害を修正しました。
+接続時のUser-Agentを共通化し、`BOOKING_USER_AGENT` 変数で変更できます。
+
+`python -m unittest -q` の49件が成功しています。
+確認内容の不一致、送信結果不明時の再送停止、成功後の再予約停止、会場をまたぐ最短日優先などを検証します。
+未知の画面や照合できない情報では確定前に停止します。
+本人情報を含むスクリーンショット・HTML・トレースは保存しません。
+
+## ローカル入力補助
+
+Python 3があるWindowsでは `setup_applicant.cmd` で本人情報入力画面を開けます。
+`python setup_applicant.py --gui` または端末入力の `python setup_applicant.py` でも登録できます。
+ローカル保存先はスクリプトと同じフォルダの `applicant.local.json`（Git除外・平文）です。
+SecretはPCへ自動ダウンロードされません。環境変数APPLICANT_JSONが優先されます。
+
+```sh
+python -m pip install -r requirements.txt
+python -m playwright install chromium
+python autofill.py
+```
+
+入力補助は確定しません。全自動のローカル実行は `python auto_reserve.py` で、
+APPLICANT_JSON、DISCORD_WEBHOOK、AUTO_RESERVE_ENABLED=true、BOOKING_TERMS_ACCEPTED=trueが必要です。

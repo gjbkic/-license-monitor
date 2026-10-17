@@ -1,0 +1,31 @@
+name: 予約サイト接続診断
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - diagnose.py
+      - browser_config.py
+      - .github/workflows/diagnose.yml
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      BOOKING_USER_AGENT: ${{ vars.BOOKING_USER_AGENT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          pip install -r requirements.txt
+          python -m playwright install chromium --with-deps
+      - run: python diagnose.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: public-site-diagnostics
+          path: public-diagnostics/
+          retention-days: 3
