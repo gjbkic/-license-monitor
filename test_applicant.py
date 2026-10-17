@@ -27,6 +27,24 @@ class ApplicantTests(unittest.TestCase):
         with self.assertRaisesRegex(ProfileError, 'certificate_number'):
             Applicant.from_dict({**DATA, 'certificate_number': 123})
 
+    def test_certificate_format_matches_public_form_length_rule(self):
+        value = '第０００１２３号'
+        self.assertEqual(Applicant.from_dict({**DATA, 'certificate_number': value}).certificate_number, value)
+        with self.assertRaises(ProfileError):
+            Applicant.from_dict({**DATA, 'certificate_number': '0' * 101})
+
+    def test_public_form_birth_selects_with_zero_padded_values(self):
+        # IDs and select structure verified in the public main.html source.
+        fields = [control('氏名（カナ又はアルファベット）', name='strNameKana'),
+                  control('連絡先電話番号', input_type='tel', name='strTelNumber'),
+                  control('卒業証明書等の番号', name='strGraduationCertificateNumber'),
+                  control('生年月日', kind='select', name='birthYear', options=[{'value': '2000', 'text': '2000'}]),
+                  control('', kind='select', name='birthMonth', options=[{'value': '00', 'text': '---'}, {'value': '01', 'text': '1'}]),
+                  control('', kind='select', name='birthDay', options=[{'value': '00', 'text': '---'}, {'value': '02', 'text': '2'}])]
+        plan = build_plan(fields, Applicant.from_dict(DATA))
+        self.assertEqual([(action, value) for _, action, value in plan[-3:]],
+                         [('select_option', '2000'), ('select_option', '01'), ('select_option', '02')])
+
     def test_invalid_birth_has_no_personal_value_in_error(self):
         invalid = '2000-02-31'
         with self.assertRaises(ProfileError) as error:

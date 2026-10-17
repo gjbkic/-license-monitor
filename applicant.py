@@ -43,8 +43,8 @@ class Applicant:
         if not re.fullmatch(r'[0-9]{10,11}', values['phone']):
             raise ProfileError('phone はハイフンなしの半角数字10〜11桁で入力してください')
         # 正式な証明書に記載された文字列を保持。サイト固有の桁数検証はサイト側で行う。
-        if not re.fullmatch(r'[0-9A-Za-z-]{1,40}', values['certificate_number']):
-            raise ProfileError('certificate_number の文字種を確認してください')
+        if not re.fullmatch(r'[^\x00-\x1f\x7f]{1,100}', values['certificate_number']):
+            raise ProfileError('certificate_number は改行なし・100文字以内で入力してください')
         return cls(**values)
 
 
