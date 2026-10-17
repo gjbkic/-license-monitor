@@ -26,5 +26,6 @@ jobs:
           BOOKING_USER_AGENT: ${{ vars.BOOKING_USER_AGENT }}
           AUTO_RESERVE_ENABLED: ${{ vars.AUTO_RESERVE_ENABLED }}
           BOOKING_TERMS_ACCEPTED: ${{ vars.BOOKING_TERMS_ACCEPTED }}
+          PUBLIC_CALENDAR_DIAGNOSTICS: 'true'
           MONITOR_END_DATE: '2026-12-31'
         run: python preflight_operation.py
