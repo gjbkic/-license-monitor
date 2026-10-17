@@ -38,6 +38,13 @@ User-Agentで404、Chrome 155のUser-Agentを指定すると200になりまし�
 
 ## 本人情報を一度登録する
 
+実フォームへの入力だけを検証する専用処理は `validate_form.py` です。
+今回の検証で利用規約へ同意することを確認した後に限り、
+`FORM_FILL_TERMS_CONFIRMED=true` と登録済み本人情報を渡して実行します。
+学科試験→教習所卒業等→免許証のみを選択し、4項目・6入力欄を埋めて値を照合します。
+本人情報画面の「進む」は押さず、予約確認API・予約作成APIへの通信も禁止しています。
+本人情報を含むスクリーンショット・HTML・操作トレースは保存しません。
+
 GitHub Repository → Settings → Secrets and variables → Actions → Secrets → New repository secret。
 
 | Secret名 | 内容 |
