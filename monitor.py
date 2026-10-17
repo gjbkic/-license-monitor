@@ -569,6 +569,12 @@ def setup_calendar(
         location
     )
 
+    # Venue selection starts an asynchronous calendar request.
+    # Its DOM may exist while still hidden; wait for the rendered calendar.
+    page.locator('.ui-datepicker-calendar').filter(visible=True).wait_for(
+        state='visible', timeout=30000
+    )
+    guard.check(page)
     year, month = get_year_month(
         page
     )
