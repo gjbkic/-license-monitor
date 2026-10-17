@@ -6,6 +6,26 @@ import monitor
 
 
 class MonitorTests(unittest.TestCase):
+    def test_custom_terms_checkbox_uses_visible_consent_text(self):
+        page = MagicMock()
+        checkbox = page.locator.return_value.first
+        checkbox.is_visible.return_value = False
+        checkbox.is_checked.side_effect = [False, True]
+        monitor.agree_terms(page)
+        checkbox.wait_for.assert_called_once_with(state='attached', timeout=30000)
+        checkbox.check.assert_not_called()
+        page.get_by_text.assert_called_once_with('「利用規約について」を読み、同意しました。', exact=True)
+        page.get_by_text.return_value.click.assert_called_once()
+
+    def test_visible_native_terms_checkbox_is_supported(self):
+        page = MagicMock()
+        checkbox = page.locator.return_value.first
+        checkbox.is_visible.return_value = True
+        checkbox.is_checked.side_effect = [False, True]
+        monitor.agree_terms(page)
+        checkbox.check.assert_called_once()
+        page.get_by_text.assert_not_called()
+
     def test_booking_context_uses_configured_user_agent(self):
         browser = MagicMock()
         with patch.dict(monitor.os.environ, {'BOOKING_USER_AGENT': 'TestBrowser/1.0'}):

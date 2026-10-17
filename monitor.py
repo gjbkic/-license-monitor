@@ -441,8 +441,14 @@ def agree_terms(page):
         'input[name="TermsOfServiceCheck"]'
     ).first
 
-    checkbox.wait_for(state="visible", timeout=30000)
-    checkbox.check()
+    checkbox.wait_for(state="attached", timeout=30000)
+    if not checkbox.is_checked():
+        if checkbox.is_visible():
+            checkbox.check()
+        else:
+            # The site's styled checkbox hides the native input. Click its
+            # visible consent text rather than waiting for that input to show.
+            page.get_by_text('「利用規約について」を読み、同意しました。', exact=True).click(timeout=15000)
 
     page.wait_for_timeout(300)
 

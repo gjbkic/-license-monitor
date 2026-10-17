@@ -11,6 +11,7 @@ from applicant import load_applicant, ProfileError
 from autofill import fill_applicant, FormError, ALLOWED_HOSTS
 from browser_config import context_options
 from site_entry import discover_booking_entry, SiteEntryError
+from monitor import agree_terms, ScanError
 
 
 class ValidationError(RuntimeError):
@@ -62,8 +63,7 @@ def run():
             stage = '学科試験の入口へ移動'
             page.get_by_text('学科試験の予約はこちら', exact=True).click(timeout=30000)
             stage = '規約への同意'
-            terms = page.locator('input[name="TermsOfServiceCheck"]')
-            terms.check(timeout=30000)
+            agree_terms(page)
             stage = '手続開始'
             page.get_by_text('手続を開始する', exact=True).click(timeout=15000)
             stage = '学科試験の選択'
@@ -91,7 +91,7 @@ def run():
             # entered the page. Never inspect or log page text after fill starts.
             if page is not None and not private_started:
                 print('入力前の公開画面: ' + page.locator('body').inner_text()[:5000], flush=True)
-            if isinstance(error, (ValidationError, FormError)):
+            if isinstance(error, (ValidationError, FormError, ScanError)):
                 raise
             raise ValidationError('画面操作が停止しました（' + type(error).__name__ + '）。入力値は表示しません。') from None
         finally:
@@ -101,7 +101,7 @@ def run():
 if __name__ == '__main__':
     try:
         run()
-    except (ValidationError, ProfileError, FormError, SiteEntryError) as error:
+    except (ValidationError, ProfileError, FormError, SiteEntryError, ScanError) as error:
         print(str(error))
         raise SystemExit(1)
     except Exception:
