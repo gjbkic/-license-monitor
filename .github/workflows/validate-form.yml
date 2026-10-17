@@ -1,0 +1,38 @@
+name: 本人情報の実フォーム入力検証（予約なし）
+
+on:
+  workflow_dispatch:
+    inputs:
+      accept_terms_for_this_run:
+        description: 今回の検証で公式利用規約に同意する
+        type: boolean
+        required: true
+        default: false
+  pull_request:
+    paths:
+      - .github/workflows/validate-form.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate-form:
+    if: github.event_name == 'workflow_dispatch' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: |
+          pip install -r requirements.txt
+          python -m playwright install chromium --with-deps
+      - name: 本人情報を入力し、進むを押さずに終了
+        env:
+          APPLICANT_JSON: ${{ secrets.APPLICANT_JSON }}
+          BOOKING_USER_AGENT: ${{ vars.BOOKING_USER_AGENT }}
+          # This one PR-triggered run was approved in chat on 2026-10-17 17:14 JST.
+          # Remove the PR trigger after inspecting its result.
+          FORM_FILL_TERMS_CONFIRMED: ${{ github.event_name == 'pull_request' || inputs.accept_terms_for_this_run }}
+        run: python validate_form.py
