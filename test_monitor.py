@@ -6,6 +6,12 @@ import monitor
 
 
 class MonitorTests(unittest.TestCase):
+    def test_booking_context_uses_configured_user_agent(self):
+        browser = MagicMock()
+        with patch.dict(monitor.os.environ, {'BOOKING_USER_AGENT': 'TestBrowser/1.0'}):
+            monitor.create_context(browser)
+        self.assertEqual(browser.new_context.call_args.kwargs['user_agent'], 'TestBrowser/1.0')
+
     def test_missing_morning_count_does_not_use_afternoon_count(self):
         slots = monitor.parse_remaining_slots(
             '午前試験 受付時間 8:00 満席 午後試験 受付時間 11:00 残り 2 名'

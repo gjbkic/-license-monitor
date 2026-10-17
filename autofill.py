@@ -5,6 +5,7 @@ from urllib.parse import urlsplit
 from playwright.sync_api import sync_playwright
 from applicant import load_applicant, ProfileError
 from site_entry import discover_booking_entry, SiteEntryError
+from browser_config import context_options
 
 ALLOWED_HOSTS = {
     'license-renew.tokyo-madoguchi-yoyaku.com',
@@ -110,7 +111,7 @@ def main():
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=False)
         try:
-            context = browser.new_context(locale='ja-JP')
+            context = browser.new_context(**context_options())
             page = context.new_page()
             page.goto(discover_booking_entry(), wait_until='domcontentloaded')
             print('ブラウザで利用規約・手続区分を確認し、予約者情報の入力画面まで進んでください。')

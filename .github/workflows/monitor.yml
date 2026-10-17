@@ -26,6 +26,8 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || vars.AUTO_RESERVE_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      BOOKING_USER_AGENT: ${{ vars.BOOKING_USER_AGENT }}
 
     steps:
       - name: コード取得

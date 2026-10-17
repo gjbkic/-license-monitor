@@ -9,6 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from playwright.sync_api import sync_playwright
 from site_entry import discover_booking_entry, SiteEntryError
+from browser_config import context_options
 
 
 # ============================================================
@@ -372,7 +373,7 @@ def create_context(browser):
             "height": 1200
         },
 
-        locale="ja-JP",
+        **context_options(),
 
     )
 
