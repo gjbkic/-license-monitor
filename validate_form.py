@@ -49,6 +49,9 @@ def run():
     applicant = load_applicant()
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
+        stage = '入口の表示'
+        private_started = False
+        page = None
         try:
             context = browser.new_context(**context_options())
             context.route('**/*', allow_static_request)
@@ -56,22 +59,41 @@ def run():
             response = page.goto(discover_booking_entry(), wait_until='domcontentloaded', timeout=60000)
             if response is None or response.status != 200:
                 raise ValidationError('予約入口を正常に読み込めませんでした。')
+            stage = '学科試験の入口へ移動'
             page.get_by_text('学科試験の予約はこちら', exact=True).click(timeout=30000)
+            stage = '規約への同意'
             terms = page.locator('input[name="TermsOfServiceCheck"]')
             terms.check(timeout=30000)
+            stage = '手続開始'
             page.get_by_text('手続を開始する', exact=True).click(timeout=15000)
+            stage = '学科試験の選択'
             page.get_by_text('学科試験', exact=True).filter(visible=True).click(timeout=30000)
+            stage = '教習所卒業等の選択'
             page.get_by_text('教習所卒業等', exact=True).filter(visible=True).click(timeout=30000)
+            stage = '免許証のみの選択'
             page.get_by_text('免許証のみ', exact=True).filter(visible=True).click(timeout=30000)
+            stage = '予約者情報画面の表示'
             page.get_by_text('予約者の情報を入力してください。', exact=True).wait_for(
                 state='visible', timeout=30000)
             for selector, value in (('typeChoice', '1'), ('typeDetailChoice', '11'), ('newLicenseChoice', '1')):
                 if not page.locator(f'input[name="{selector}"][value="{value}"]').is_checked():
                     raise ValidationError('教習所卒業等・免許証のみの手続区分を確認できません。')
+            print('予約者情報の入力画面に到達しました。', flush=True)
+            stage = '本人情報の入力・照合'
+            private_started = True
             fill_applicant(page, applicant)
             verify_fields(page, applicant)
             # Do not click nextPageBtn03: it would call the customer check API.
             print('本人情報4項目の入力と6欄の照合に成功しました。進む・予約確定は押していません。')
+        except Exception as error:
+            print('停止段階: ' + stage, flush=True)
+            # This is a fresh browser context; before fill no personal data has
+            # entered the page. Never inspect or log page text after fill starts.
+            if page is not None and not private_started:
+                print('入力前の公開画面: ' + page.locator('body').inner_text()[:5000], flush=True)
+            if isinstance(error, (ValidationError, FormError)):
+                raise
+            raise ValidationError('画面操作が停止しました（' + type(error).__name__ + '）。入力値は表示しません。') from None
         finally:
             browser.close()
 
