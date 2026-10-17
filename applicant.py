@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
+PROFILE_PATH = Path(__file__).resolve().with_name('applicant.local.json')
+
 
 class ProfileError(ValueError):
     pass
@@ -30,7 +32,7 @@ class Applicant:
             if not isinstance(data.get(name), str) or not data[name].strip():
                 raise ProfileError(f'{name} を文字列で入力してください')
         values = {name: data[name].strip() for name in names}
-        if len(values['name_kana']) > 100:
+        if len(values['name_kana']) > 40:
             raise ProfileError('name_kana が長すぎます')
         try:
             born = date.fromisoformat(values['birth_date'])
@@ -50,7 +52,7 @@ def load_applicant():
     raw = os.environ.get('APPLICANT_JSON', '')
     if not raw:
         try:
-            raw = Path('applicant.local.json').read_text(encoding='utf-8')
+            raw = PROFILE_PATH.read_text(encoding='utf-8')
         except OSError:
             raise ProfileError('APPLICANT_JSON または applicant.local.json を設定してください') from None
     try:

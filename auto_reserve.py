@@ -1,6 +1,6 @@
 """Scan for a slot and reserve once with the user's saved applicant data.
 
-Live end-to-end operation is unverified while the official application returns 404.
+The entry page loads in the verified Actions run; end-to-end booking is unverified.
 Unknown screens and unknown submission outcomes stop rather than click again.
 """
 import json

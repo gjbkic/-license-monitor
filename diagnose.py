@@ -1,13 +1,58 @@
 """Read-only diagnosis before accepting terms or supplying applicant information."""
 import json
+import re
+from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urljoin
 from playwright.sync_api import sync_playwright
 from site_entry import OFFICIAL_URL, discover_booking_entry
 from browser_config import context_options
 
 
 OUT = Path('public-diagnostics')
+
+
+class PublicScripts(HTMLParser):
+    def __init__(self):
+        super().__init__()
+        self.scripts = []
+
+    def handle_starttag(self, tag, attrs):
+        attrs = dict(attrs)
+        if tag == 'script' and attrs.get('src'):
+            self.scripts.append(attrs['src'])
+
+
+def public_form_source(context, page_url, index_script):
+    # Fetch the exact static page named by the public index script. This only reads
+    # source files: no terms checkbox, application JS, API or reservation is executed.
+    match = re.search(r'location\.href\s*=\s*[\'"](\./01/html/main\.html\?lang=)[\'"]', index_script)
+    if not match:
+        return {'status': 'not_linked'}
+    url = urljoin(page_url, match.group(1) + 'ja')
+    response = context.request.get(url, timeout=15000)
+    result = {'url': safe_url(url), 'status': response.status}
+    if not response.ok:
+        return result
+    content = response.body()
+    if len(content) > 2000000:
+        return {**result, 'error': 'source_too_large'}
+    (OUT / 'form-public.html').write_bytes(content)
+    parser = PublicScripts()
+    parser.feed(content.decode('utf-8'))
+    for index, src in enumerate(parser.scripts):
+        script_url = urljoin(url, src)
+        if urlsplit(script_url).netloc != urlsplit(page_url).netloc:
+            continue
+        # Common scripts have already been captured on the index page.
+        if not re.search(r'MKAYMA[^/]+\.js$', urlsplit(script_url).path):
+            continue
+        script = context.request.get(script_url, timeout=15000)
+        body = script.body()
+        result.setdefault('scripts', []).append({'url': safe_url(script_url), 'status': script.status})
+        if script.ok and len(body) <= 2000000:
+            (OUT / f'form-script-{index}.js').write_bytes(body)
+    return result
 
 
 def safe_url(url):
@@ -44,6 +89,7 @@ def main():
             details = {'official_source': OFFICIAL_URL, 'entry': discover_booking_entry(), 'url': safe_url(page.url), 'title': page.title(),
                        'body': page.locator('body').inner_text()[:20000],
                        'user_agent': context_options()['user_agent']}
+            details['entry_ready'] = '手続を開始する' in details['body']
             scripts = page.locator('script[src]').evaluate_all('(els)=>els.map(el=>el.src)')
             details['scripts'] = [safe_url(url) for url in scripts]
             # Only public JavaScript resources referenced by the actual page, same origin.
@@ -56,8 +102,14 @@ def main():
                     {'url': safe_url(url), 'status': response.status, 'bytes': len(content)})
                 if response.ok and len(content) <= 2000000:
                     (OUT / f'script-{index}.js').write_bytes(content)
+                    if urlsplit(url).path.endswith('/MKAYMA001Index.js'):
+                        details['public_form_source'] = public_form_source(
+                            context, page.url, content.decode('utf-8'))
             (OUT / 'page.json').write_text(json.dumps(details, ensure_ascii=False, indent=2))
             print('PAGE', json.dumps(details, ensure_ascii=False), flush=True)
+            if not details['entry_ready'] or any(
+                    item['status'] != 200 for item in details.get('script_fetches', [])):
+                raise SystemExit('予約入口または必要なJavaScriptの読込検証に失敗しました')
         finally:
             (OUT / 'network.json').write_text(json.dumps(network, ensure_ascii=False, indent=2))
             (OUT / 'page-errors.json').write_text(json.dumps(console, ensure_ascii=False, indent=2))
