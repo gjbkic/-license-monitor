@@ -26,11 +26,7 @@ def first_at_location(browser, location, today, end):
         return []
     except monitor.AccessBlocked:
         raise
-    except Exception as error:
-        if __import__('os').environ.get('PUBLIC_CALENDAR_DIAGNOSTICS') == 'true':
-            print('公開カレンダー停止: ' + type(error).__name__ + ' ' + str(error), flush=True)
-            print('公開カレンダー表示: ' + page.locator('body').inner_text()[:16000], flush=True)
-            print('公開カレンダー年月DOM: ' + str(page.locator('.ui-datepicker-header').all_inner_texts()), flush=True)
+    except Exception:
         raise monitor.ScanError(location + 'の最短日確認が完了しませんでした。空きなしとは判定していません。') from None
     finally:
         context.close()
