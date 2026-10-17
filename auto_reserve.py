@@ -16,6 +16,7 @@ from applicant import load_applicant, ProfileError
 from autofill import fill_applicant, FormError
 import monitor
 from site_entry import discover_booking_entry, SiteEntryError
+from earliest import earliest_candidates
 
 STATE_PATH = Path('.booking_state.json')
 
@@ -127,41 +128,25 @@ def open_booking_calendar(page, guard, slot, applicant):
     if response and response.status >= 400:
         raise BookingError(f'入口ページの読込失敗 HTTP {response.status}')
     monitor.click_text(page, guard, '学科試験の予約はこちら')
-    guard.check(page)
-    # The operator explicitly enables this mode only after reading the official terms.
     monitor.agree_terms(page)
     monitor.click_text(page, guard, '手続を開始する')
-    filled = False
-    selected_location = False
-    for _ in range(18):
-        guard.check(page)
-        if page.locator('.ui-datepicker-calendar').filter(visible=True).count():
-            if not filled or not selected_location:
-                raise BookingError('本人情報入力と会場選択を確認できないままカレンダーが表示されました')
-            return
-        if visible_text(page, '予約者の情報を入力してください。').count():
-            if filled:
-                raise BookingError('本人情報画面に戻りました。入力内容や既存予約を確認してください')
-            fill_applicant(page, applicant)
-            filled = True
-            next_button(page).click()
-            page.wait_for_timeout(800)
-            continue
-        if visible_text(page, slot['location']).count():
-            monitor.click_text(page, guard, slot['location'])
-            selected_location = True
-            continue
-        advanced = False
-        for choice in ('学科試験', '教習所卒業等', '免許証のみ', '卒業証明書をお持ちの方'):
-            if visible_text(page, choice).count() == 1:
-                monitor.click_text(page, guard, choice)
-                advanced = True
-                break
-        if not advanced:
-            # Do not guess which branch/checkbox/button applies on an unknown page.
-            raise BookingError('予約手続の画面構成を確認できません。予約確定は行っていません。')
-    raise BookingError('予約画面の遷移回数が上限を超えました')
-
+    for choice in ('学科試験', '教習所卒業等', '免許証のみ'):
+        monitor.click_text(page, guard, choice)
+    visible_text(page, '予約者の情報を入力してください。').wait_for(state='visible', timeout=30000)
+    fill_applicant(page, applicant)
+    next_button(page).click()
+    # customerops checks the user's data before making venues selectable.
+    # Wait for its result rather than assuming that an 800 ms delay is enough.
+    try:
+        visible_text(page, slot['location']).wait_for(state='visible', timeout=45000)
+    except Exception:
+        fields = page.locator('input.error:visible, select.error:visible')
+        if fields.count():
+            raise BookingError('本人情報にサイトの入力エラーがあります。値はログへ表示しません。') from None
+        raise BookingError('本人情報確認後に会場選択へ進めません。既存予約・入力情報・接続状態を確認してください。') from None
+    monitor.click_text(page, guard, slot['location'])
+    page.locator('.ui-datepicker-calendar').filter(visible=True).wait_for(state='visible', timeout=30000)
+    guard.check(page)
 
 def select_trial_slot(page, guard, slot):
     positives = monitor.inspect_date(page, guard, slot['date'])
@@ -268,8 +253,10 @@ def run_once():
                 if receipt:
                     notify_booked(read_booking_state())
                     raise Finished()
-            for location in monitor.LOCATIONS:
-                monitor.scan_location(browser, location, on_slot=found)
+            candidates = earliest_candidates(browser, today, end)
+            print('全3会場の最短日を比較しました。候補数: ' + str(len(candidates)), flush=True)
+            for slot in candidates:
+                found(slot)
             monitor.register_success(cooldown)
             print('今回の確認では予約取得に至りませんでした。')
         except Finished:

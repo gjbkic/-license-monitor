@@ -1,0 +1,30 @@
+name: 予約運用の事前検証（予約なし）
+on:
+  pull_request:
+    paths:
+      - .github/workflows/preflight-operation.yml
+permissions:
+  contents: read
+jobs:
+  preflight:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r requirements.txt
+      - name: 回帰テスト
+        run: python -m unittest -q
+      - run: python -m playwright install chromium --with-deps
+      - name: 予約経路・最短候補・通知先の確認
+        env:
+          APPLICANT_JSON: ${{ secrets.APPLICANT_JSON }}
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          BOOKING_USER_AGENT: ${{ vars.BOOKING_USER_AGENT }}
+          AUTO_RESERVE_ENABLED: ${{ vars.AUTO_RESERVE_ENABLED }}
+          BOOKING_TERMS_ACCEPTED: ${{ vars.BOOKING_TERMS_ACCEPTED }}
+          MONITOR_END_DATE: '2026-12-31'
+        run: python preflight_operation.py
