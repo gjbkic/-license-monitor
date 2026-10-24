@@ -7,3 +7,5 @@ applicant.local.json
 public-diagnostics/
 .booking_state.json
 .booking_state.tmp
+.monitor_loop.json
+.monitor_loop.tmp
