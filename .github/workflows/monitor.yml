@@ -1,11 +1,6 @@
 name: 本免キャンセル監視
 
 on:
-  push:
-    branches: [main]
-    paths: ['.github/workflows/monitor.yml', 'continuous_monitor.py', 'monitor_control.json']
-  schedule:
-    - cron: '2,7,12,17,22,27,32,37,42,47,52,57 * * * *'
   workflow_dispatch:
     inputs:
       operation:
@@ -26,7 +21,7 @@ concurrency:
 
 jobs:
   monitor:
-    if: github.event_name == 'workflow_dispatch' || vars.AUTO_RESERVE_ENABLED != 'false'
+    if: false # Stopped by user request: do not execute monitor
     outputs:
       continue: ${{ steps.loop.outputs.continue }}
     runs-on: ubuntu-latest
@@ -116,7 +111,7 @@ jobs:
 
   continue_monitor:
     needs: monitor
-    if: github.event_name == 'push' && needs.monitor.result == 'success' && needs.monitor.outputs.continue == 'true'
+    if: false # Stopped by user request: do not continue monitoring
     runs-on: ubuntu-latest
     timeout-minutes: 355
     env:
